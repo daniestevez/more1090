@@ -1,0 +1,50 @@
+{
+  "benchmark": {
+    "cn0": 81.5,
+    "num_packets": 100000,
+    "num_threads": 16,
+    "random_seed": 0
+  },
+  "results": {
+    "avg_cn0_error": -0.34826823477088786,
+    "avg_decode_time_error": -0.02206867512606005,
+    "avg_detection_time_error": -15.543111412819643,
+    "decode_probability": 1.0,
+    "decode_probability_noncoherent": 0.0,
+    "decode_probability_one_bit_error": 0.0,
+    "decode_probability_two_bit_errors": 0.0,
+    "decode_probability_zero_bit_errors": 1.0,
+    "decode_wrong_probability": 0.0,
+    "decode_wrong_probability_noncoherent": null,
+    "decode_wrong_probability_one_bit_error": 0.0,
+    "decode_wrong_probability_two_bit_errors": 0.0,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "detection_probability": 1.0,
+    "max_cn0_error": 2.9854660034179688,
+    "max_decode_time_error": 0.3916016398543434,
+    "max_detection_time_error": 88.49230926903056,
+    "max_frequency_error": 299.18550821930694,
+    "num_decoded": 100015,
+    "num_decoded_noncoherent": 0,
+    "num_decoded_one_bit_error": 0,
+    "num_decoded_two_bit_errors": 0,
+    "num_decoded_wrong": 0,
+    "num_decoded_wrong_noncoherent": 0,
+    "num_decoded_wrong_one_bit_error": 0,
+    "num_decoded_wrong_two_bit_errors": 0,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 100015,
+    "num_detections": 100015,
+    "num_packets": 100015,
+    "real_time_duration": {
+      "nanos": 154589584,
+      "secs": 4
+    },
+    "rms_frequency_error": 64.55654577616595,
+    "std_cn0_error": 0.6128754295817604,
+    "std_decode_time_error": 0.05736025348753451,
+    "std_detection_time_error": 37.096618069331704,
+    "thread_throughput_sps": 12518155.87279439,
+    "throughput_sps": 200290493.96471024
+  }
+}

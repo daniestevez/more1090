@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8b2f92fc1b82a457a3742edeff466bcc341e240d1a427b1f49b9c836f7115449 # shrinks to message_start = 1946, carrier_frequency_offset = -99923.11876751888, symbol_clock_error = 3.284176284686389e-7
