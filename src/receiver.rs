@@ -623,6 +623,7 @@ impl ADSBReceiver {
         );
         phasor_shift(&mut self.packet_samples, carrier_phasor.conj());
         accumulate_symbols(&self.packet_samples, &mut self.symbols);
+        self.refine_clock_phase();
         for (symbols, (coherent, noncoherent)) in self.symbols.iter().zip(
             self.coherent_demod
                 .iter_mut()
@@ -936,6 +937,51 @@ impl ADSBReceiver {
         // timing cannot be much further off than one sample.
         let subsample_timing = subsample_timing.clamp(-1.0, 1.0);
         subsample_timing + prompt_offset
+    }
+
+    // Refines the clock phase to a fraction of a sample before demodulation: the energy of the
+    // coherent decision variable at the 8 timing hypotheses (clock phase and pairing), a parabola
+    // over the three around the largest, and the symbols at that timing as the blend of the two
+    // neighbouring clock phases, in place of the nearest one.
+    fn refine_clock_phase(&mut self) {
+        let mut eye = [0.0f32; 2 * SPS];
+        for p in 0..2 {
+            for k in 0..SPS {
+                let s = &self.symbols[k];
+                let mut e = 0.0f32;
+                for n in 0..(PACKET_WINDOW_SYMBOLS - 2) / 2 {
+                    let d = s[2 * n + p].re - s[2 * n + p + 1].re;
+                    e = e.algebraic_add(d * d);
+                }
+                eye[SPS * p + k] = e;
+            }
+        }
+        let s_max = (0..2 * SPS)
+            .max_by(|&a, &b| eye[a].total_cmp(&eye[b]))
+            .unwrap();
+        let prev = eye[(s_max + 2 * SPS - 1) % (2 * SPS)];
+        let next = eye[(s_max + 1) % (2 * SPS)];
+        let tau = parabolic_interpolation([prev, eye[s_max], next]).clamp(-1.0, 1.0);
+        if !tau.is_finite() {
+            return;
+        }
+        let k = s_max % SPS;
+        let (kn, shift): (usize, isize) = if tau >= 0.0 {
+            if k + 1 < SPS { (k + 1, 0) } else { (0, 1) }
+        } else if k > 0 {
+            (k - 1, 0)
+        } else {
+            (SPS - 1, -1)
+        };
+        let w = tau.abs();
+        let mut frac = [Complex32::default(); PACKET_WINDOW_SYMBOLS];
+        for n in 0..PACKET_WINDOW_SYMBOLS {
+            let m = (n as isize + shift).clamp(0, PACKET_WINDOW_SYMBOLS as isize - 1) as usize;
+            let a = self.symbols[k][n];
+            let b = self.symbols[kn][m];
+            frac[n] = Complex32::new((1.0 - w) * a.re + w * b.re, (1.0 - w) * a.im + w * b.im);
+        }
+        self.symbols[k] = frac;
     }
 
     fn samples_for_location(&self, location: &DecodeLocation) -> &[Complex32; MODE_S_LONG_SAMPLES] {
