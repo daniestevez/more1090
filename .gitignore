@@ -3,4 +3,5 @@
 #*#
 .#*
 perf.*
-flamegraph.svg
+flamegraph.*
+gecko_profile.json

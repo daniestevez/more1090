@@ -1,0 +1,2 @@
+[alias]
+release-test = "test --release --features heavy-tests"

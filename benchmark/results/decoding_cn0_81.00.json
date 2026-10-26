@@ -3,12 +3,19 @@
     "cn0": 81.0,
     "num_packets": 100000,
     "num_threads": 16,
-    "random_seed": 0
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
   },
   "results": {
-    "avg_cn0_error": -0.34874994176593727,
-    "avg_decode_time_error": -0.022118946113174335,
-    "avg_detection_time_error": -15.545445142309557,
+    "avg_cn0_error": -0.31774003189086913,
+    "avg_decode_time_error": -0.021981286280226806,
+    "avg_detection_time_error": -15.547974341638472,
     "decode_probability": 1.0,
     "decode_probability_noncoherent": 0.0,
     "decode_probability_one_bit_error": 0.0,
@@ -20,11 +27,11 @@
     "decode_wrong_probability_two_bit_errors": 0.0,
     "decode_wrong_probability_zero_bit_errors": 0.0,
     "detection_probability": 1.0,
-    "max_cn0_error": 2.9783935546875,
-    "max_decode_time_error": 0.4010309475379472,
-    "max_detection_time_error": 88.49230926903056,
-    "max_frequency_error": 314.2631883025606,
-    "num_decoded": 100015,
+    "max_cn0_error": 1.9382247924804688,
+    "max_decode_time_error": 0.16188804108878685,
+    "max_detection_time_error": 88.49230932840146,
+    "max_frequency_error": 314.26408636361884,
+    "num_decoded": 100000,
     "num_decoded_noncoherent": 0,
     "num_decoded_one_bit_error": 0,
     "num_decoded_two_bit_errors": 0,
@@ -33,18 +40,18 @@
     "num_decoded_wrong_one_bit_error": 0,
     "num_decoded_wrong_two_bit_errors": 0,
     "num_decoded_wrong_zero_bit_errors": 0,
-    "num_decoded_zero_bit_errors": 100015,
-    "num_detections": 100015,
-    "num_packets": 100015,
+    "num_decoded_zero_bit_errors": 100000,
+    "num_detections": 100000,
+    "num_packets": 100000,
     "real_time_duration": {
-      "nanos": 121493259,
+      "nanos": 355396319,
       "secs": 4
     },
-    "rms_frequency_error": 67.84456120370515,
-    "std_cn0_error": 0.6146528793632964,
-    "std_decode_time_error": 0.058402053572595904,
-    "std_detection_time_error": 37.10780852426753,
-    "thread_throughput_sps": 12618678.894216772,
-    "throughput_sps": 201898862.30746835
+    "rms_frequency_error": 67.80861375479424,
+    "std_cn0_error": 0.41506175851369614,
+    "std_decode_time_error": 0.05395900534163926,
+    "std_detection_time_error": 37.109345236520575,
+    "thread_throughput_sps": 11939212.00078968,
+    "throughput_sps": 191027392.01263487
   }
 }

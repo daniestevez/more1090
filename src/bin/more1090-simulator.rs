@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use more1090::{
     cli::Seconds,
     constants::{
-        dsp::{SAMPLE_RATE_F64, SPS},
+        dsp::{SAMPLE_RATE_F64, SAMPLE_RATE_USIZE, SPS},
         mode_s::TOTAL_MODE_S_LONG_REPLY_BITS,
     },
     io::{CF32LEWriter, WriteComplex32},
@@ -29,8 +29,7 @@ use std::{fs::File, path::PathBuf, time::Duration};
 #[derive(Debug, Clone, PartialEq, Parser)]
 #[command(
     version,
-    about,
-    long_about = "ADS-B signal simulator from the more1090 project"
+    about = "Secondary surveillance radar reply signal simulator from the more1090 project"
 )]
 pub struct Args {
     /// Subcommand.
@@ -95,6 +94,9 @@ pub enum Command {
         // This documentation needs to match SymbolClockErrorDistribution::default
         #[arg(long)]
         symbol_clock_error: Option<f64>,
+        /// Message type.
+        #[arg(long, default_value = "extended-squitter")]
+        message_type: MessageType,
     },
     /// Full scenario containing messages with parameters drawn from random
     /// distributions.
@@ -109,13 +111,13 @@ pub enum Command {
         #[arg(long, default_value_t = 2000.0)]
         messages_per_second: f64,
         /// Maximum CN0 in dB·Hz.
-        #[arg(long, default_value_t = 100.0)]
+        #[arg(long, default_value_t = 105.0)]
         max_cn0: f64,
         /// Minimum distance to transmitters in km.
         #[arg(long, default_value_t = 10.0)]
         min_distance: f64,
         /// Maximum distance to transmitters in km.
-        #[arg(long, default_value_t = 300.0)]
+        #[arg(long, default_value_t = 500.0)]
         max_distance: f64,
     },
 }
@@ -135,7 +137,7 @@ impl Args {
         }
     }
 
-    fn rng(&self) -> impl Rng + use<> {
+    fn rng(&self) -> impl Rng + SeedableRng + use<> {
         let seed = if let Some(seed) = self.global().seed {
             seed
         } else {
@@ -159,6 +161,57 @@ where
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct MessageCounter {
+    extended_squitter: u64,
+    acquisition_squitter: u64,
+    short_ap: u64,
+    all_call_reply: u64,
+    long_ap: u64,
+    military_extended_squitter: u64,
+    mode_ac: u64,
+}
+
+impl Default for MessageCounter {
+    fn default() -> MessageCounter {
+        MessageCounter::new()
+    }
+}
+
+impl MessageCounter {
+    fn new() -> MessageCounter {
+        MessageCounter {
+            extended_squitter: 0,
+            acquisition_squitter: 0,
+            short_ap: 0,
+            all_call_reply: 0,
+            long_ap: 0,
+            military_extended_squitter: 0,
+            mode_ac: 0,
+        }
+    }
+
+    fn get_and_increment(&mut self, message_type: MessageType) -> u64 {
+        macro_rules! post_incr {
+            ($field:ident) => {{
+                let ret = self.$field;
+                self.$field += 1;
+                ret
+            }};
+        }
+
+        match message_type {
+            MessageType::ExtendedSquitter => post_incr!(extended_squitter),
+            MessageType::AcquisitionSquitter => post_incr!(acquisition_squitter),
+            MessageType::ShortAP => post_incr!(short_ap),
+            MessageType::AllCallReply => post_incr!(all_call_reply),
+            MessageType::LongAP => post_incr!(long_ap),
+            MessageType::MilitaryExtendedSquitter => post_incr!(military_extended_squitter),
+            MessageType::ModeAC => post_incr!(mode_ac),
+        }
+    }
+}
+
 pub fn main() -> Result<()> {
     let args = Args::parse();
     let duration = args.duration();
@@ -178,6 +231,8 @@ pub fn main() -> Result<()> {
         };
     }
 
+    let mut meta = sigmf::simulation_meta();
+
     match args.command {
         Command::SingleMessage {
             message_start,
@@ -185,6 +240,7 @@ pub fn main() -> Result<()> {
             carrier_frequency_offset,
             carrier_phase,
             symbol_clock_error,
+            message_type,
             ..
         } => {
             let num_samples = duration_as_samples(duration);
@@ -194,7 +250,7 @@ pub fn main() -> Result<()> {
             } else {
                 // This assumes that the symbol clock error is zero.  If the
                 // symbol clock error is non-zero, the message will not be centered
-                // exactly in the middle of the simualation time span.
+                // exactly in the middle of the simulation time span.
                 let message_samples = 2 * TOTAL_MODE_S_LONG_REPLY_BITS * SPS;
                 let nominal = (num_samples as f64 - message_samples as f64) * 0.5;
                 let max_error = message_samples as f64;
@@ -219,10 +275,16 @@ pub fn main() -> Result<()> {
                 message_config: MessageConfig::from_distributions(
                     timestamp_samples,
                     distributions,
-                    MessageType::ExtendedSquitter,
+                    message_type,
                     &mut rng,
                 ),
             };
+            let label = "";
+            if let Err(err) =
+                meta.add_simulation_message_annotation(&simulation.message_config, label)
+            {
+                eprintln!("failed to add SigMF annotation: {err}");
+            }
             let iq = simulation.run(&mut rng);
             let mut writer = create_writer!();
             writer
@@ -251,15 +313,23 @@ pub fn main() -> Result<()> {
                     carrier_phase: Default::default(),
                     symbol_clock_error: Default::default(),
                 },
+                // A batch size of 1 second is good to reduce overhead.
+                batch_size: SAMPLE_RATE_USIZE,
             };
             let mut rng = args.rng();
             let mut writer = create_writer!();
-            simulation.run(&mut rng, &mut writer)?;
+            let mut num_messages = MessageCounter::new();
+            simulation.run(&mut rng, &mut writer, |message_config| {
+                let message_type = MessageType::from_message(&message_config.message).unwrap();
+                let num_message = num_messages.get_and_increment(message_type);
+                let label = format!("{message_type} {num_message}");
+                meta.add_simulation_message_annotation(message_config, &label)?;
+                Ok(())
+            })?;
             flush_writer!(writer);
         }
     }
 
-    let meta = sigmf::simulation_meta();
     meta.to_file(sigmf::meta_path(&args.global().sigmf_file)?)
         .context("failed to write .sigmf-meta file")?;
 

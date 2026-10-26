@@ -184,6 +184,30 @@ pub fn compute_crc(bytes: &[u8; PACKET_WINDOW_BYTES], bit_offset: usize) -> u32 
     digest.finalize()
 }
 
+pub fn compute_hamming_distance(
+    bytes_a: &[u8; PACKET_WINDOW_BYTES],
+    bytes_b: &[u8; PACKET_WINDOW_BYTES],
+    bit_offset: usize,
+) -> u32 {
+    let byte_offset = bit_offset / 8;
+    let bit_offset = bit_offset - 8 * byte_offset;
+    if bit_offset == 0 {
+        bytes_a[byte_offset..byte_offset + MODE_S_LONG_BYTES]
+            .iter()
+            .zip(bytes_b[byte_offset..byte_offset + MODE_S_LONG_BYTES].iter())
+            .map(|(a, b)| (a ^ b).count_ones())
+            .sum()
+    } else {
+        let mut distance = 0;
+        for k in byte_offset..byte_offset + MODE_S_LONG_BYTES {
+            let a = (bytes_a[k] << bit_offset) | (bytes_a[k + 1] >> (8 - bit_offset));
+            let b = (bytes_b[k] << bit_offset) | (bytes_b[k + 1] >> (8 - bit_offset));
+            distance += (a ^ b).count_ones();
+        }
+        distance
+    }
+}
+
 // Checks that the DF, taking the bit errors into account, matches a value
 // assigned to extended squitter replies. Additionally, it also checks that for
 // DF17, the value of the CA field is in CA_VALID and for DF18 the
@@ -267,19 +291,6 @@ pub fn correct_message_bit_errors(
     }
 }
 
-pub fn preamble_corr(symbols: &[Complex32; PREAMBLE_MASK_LEN]) -> f32 {
-    let mut z = Complex32::new(0.0, 0.0);
-    for (&w, s) in symbols.iter().zip(PREAMBLE_MASK) {
-        match s {
-            1 => z = z.algebraic_add(w),
-            -1 => z = z.algebraic_sub(w),
-            0 => {}
-            _ => unreachable!(),
-        }
-    }
-    z.algebraic_norm_sqr()
-}
-
 fn extract_message_bit(message: &[u8; MODE_S_LONG_BYTES], bit_index: usize) -> u8 {
     (message[bit_index / 8] >> (7 - (bit_index % 8))) & 1
 }
@@ -301,28 +312,17 @@ pub fn postdecode_power(
 // the 2 central samples in the pulse position where the message does not
 // transmit a pulse are taken. The other 2 samples in this pulse position are
 // ignored because they can be contaminated with the power from adjacent
-// pulses. The 4 taken samples from each pair of bits are integrated coherently
-// as a crude lowpass filter that is similar to the Mode-S PSD. The main reason
-// to do this filtering is to have some rejection to DME/TACAN stations in
-// adjacent channels, which are in-band at 8 Msps but have reduced impact on
-// Mode-S decoding. All these 4-sample coherent integrations are integrated
+// pulses. All these 2-sample coherent integrations are integrated
 // non-coherently.
 pub fn postdecode_noise_power(
     samples: &[Complex32; MODE_S_LONG_SAMPLES],
     message: &[u8; MODE_S_LONG_BYTES],
 ) -> f32 {
     let mut power: f32 = 0.0;
-    for (j, z) in samples.as_chunks::<{ 4 * SPS }>().0.iter().enumerate() {
-        let b0 = usize::from(extract_message_bit(message, 2 * j));
-        let b1 = usize::from(extract_message_bit(message, 2 * j + 1));
-        let start0 = SPS * b0 + 1;
-        let start1 = 2 * SPS + SPS * b1 + 1;
-        let gap0 = &z[start0..start0 + 2];
-        let gap1 = &z[start1..start1 + 2];
-        let w = gap0[0]
-            .algebraic_add(gap0[1])
-            .algebraic_add(gap1[0])
-            .algebraic_add(gap1[1]);
+    for (j, z) in samples.as_chunks::<{ 2 * SPS }>().0.iter().enumerate() {
+        let b = usize::from(extract_message_bit(message, j));
+        let start = SPS * b + 1;
+        let w = z[start].algebraic_add(z[start + 1]);
         power = power.algebraic_add(w.algebraic_norm_sqr());
     }
     power
@@ -334,6 +334,7 @@ mod test {
         super::test::{any_message, copy_message_to_bytes},
         *,
     };
+    use crate::constants::mode_s::MODE_S_LONG_BITS;
     use proptest::num::f32::{NEGATIVE, POSITIVE, SUBNORMAL, ZERO};
     use proptest::prelude::*;
 
@@ -519,6 +520,26 @@ mod test {
         }
     }
 
+    proptest! {
+        #[test]
+        fn compute_hamming_distance(
+            bit_offset in 0..8*(PACKET_WINDOW_BYTES-MODE_S_LONG_BYTES),
+            bytes_a in any_bytes(),
+            flipped_bits in proptest::sample::subsequence(
+                (0..MODE_S_LONG_BITS).collect::<Vec<_>>(), 0..MODE_S_LONG_BITS)
+        ) {
+            let mut bytes_b = bytes_a;
+            for bit in flipped_bits.iter() {
+                let bit = bit_offset + bit;
+                let byte = bit / 8;
+                let bit = bit - 8 * byte;
+                bytes_b[byte] ^= 1 << (7 - bit);
+            }
+            let distance = super::compute_hamming_distance(&bytes_a, &bytes_b, bit_offset);
+            assert_eq!(usize::try_from(distance).unwrap(), flipped_bits.len());
+        }
+    }
+
     #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
     enum MessageHeader {
         DF17(CA),
@@ -686,16 +707,6 @@ mod test {
         }
     }
 
-    #[test]
-    fn preamble_corr_of_preamble() {
-        let one = Complex32::new(1.0, 0.0);
-        let zero = Complex32::new(0.0, 0.0);
-        let preamble = [one, zero, one, zero, zero, zero, zero, one, zero, one];
-        let corr = preamble_corr(&preamble);
-        let expected = 16.0;
-        assert_eq!(corr, expected);
-    }
-
     proptest! {
         #[test]
         fn postdecode_power(
@@ -747,7 +758,7 @@ mod test {
             samples in proptest::collection::vec(complex_2x2(), MODE_S_LONG_SAMPLES),
             message in any_message(),
         ) {
-            let mut noise_samples = samples.as_chunks::<{ 2 * SPS }>()
+            let noise_samples = samples.as_chunks::<{ 2 * SPS }>()
                 .0
                 .iter()
                 .enumerate()
@@ -763,10 +774,7 @@ mod test {
                     };
                     z[1] + z[2]
                 });
-            let mut expected = 0.0;
-            while let Some(z) = noise_samples.next() {
-                expected += (z + noise_samples.next().unwrap()).norm_sqr()
-            }
+            let expected = noise_samples.map(|z| z.norm_sqr()).sum::<f32>();
             let power = super::postdecode_noise_power(&samples[..].try_into().unwrap(), &message);
             assert!((power - expected).abs() <= 1e-5 * expected);
         }

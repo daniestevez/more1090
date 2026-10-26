@@ -1,25 +1,41 @@
-//! ADS-B pulse shape.
+//! Mode-S and Mode-A/C pulse shapes.
 //!
-//! This module implements a polyphase filter used to simulate a band-limited ADS-B pulse shape.
+//! This module implements polyphase filters used to simulate band-limited
+//! Mode-S and Mode-A/C reply pulse shapes.
 
 use super::Pulses;
 use crate::constants::dsp::SPS;
 use pm_remez::{BandSetting, constant, pm_parameters, pm_remez};
 use std::sync::OnceLock;
 
-/// Number of branches in the polyphase filter.
+/// Number of branches in the polyphase filters.
 pub const NUM_BRANCHES: usize = 64 * SPS; // this needs to be a multiple of SPS
 
-/// Number of taps per branch in the polyphase filter.
+/// Number of taps per branch in the polyphase filters.
 pub const TAPS_PER_BRANCH: usize = 7;
 
 const PROTOTYPE_LEN: usize = NUM_BRANCHES * TAPS_PER_BRANCH;
 
-// times in samples
-const RISE_TIME: usize = 38;
-const FALL_TIME: usize = 64;
-const PULSE_DURATION: usize = 256;
-const PULSE_TOTAL_LEN: usize = PULSE_DURATION + (RISE_TIME + FALL_TIME) / 2;
+// Mode-S time constants in samples. These are for a sample rate of 64 * 8 Msps.
+const MODE_S_RISE_TIME: usize = 38;
+const MODE_S_FALL_TIME: usize = 64;
+const MODE_S_PULSE_DURATION: usize = 256;
+const MODE_S_PULSE_TOTAL_LEN: usize =
+    MODE_S_PULSE_DURATION + (MODE_S_RISE_TIME + MODE_S_FALL_TIME) / 2;
+
+// Mode-AC time constants in samples. These are for a sample rate of 64 * 8 Msps * 1500 / 1450
+const MODE_AC_RISE_TIME: usize = 40;
+const MODE_AC_FALL_TIME: usize = 40;
+const MODE_AC_PULSE_DURATION: usize = 238;
+const MODE_AC_PULSE_TOTAL_LEN: usize =
+    MODE_AC_PULSE_DURATION + (MODE_AC_RISE_TIME + MODE_AC_FALL_TIME) / 2;
+
+/// Sample rate ratio of Mode-A/C filterbank with respect to Mode-S filterbank.
+///
+/// Since a Mode-AC pulse plus blank is 1.45 usecs, we design the Mode-AC
+/// filterbank for a sample rate of 1500/1450 * 8 Msps so that a Mode-AC pulse
+/// can be generated as a `[_, false, false]` sequence of pulses.
+pub const MODE_AC_SAMP_RATE_RATIO: f64 = 1500.0 / 1450.0;
 
 /// Pulse shape filterbank.
 ///
@@ -36,30 +52,51 @@ struct FilterbankData {
     group_delay: f64,
 }
 
-impl FilterbankData {
-    fn get() -> &'static FilterbankData {
-        static FILTERBANK_DATA: OnceLock<FilterbankData> = OnceLock::new();
-        FILTERBANK_DATA.get_or_init(|| {
-            let prototype = build_prototype_filter();
-            let group_delay = compute_group_delay(&prototype);
-            let filterbank = (0..NUM_BRANCHES)
-                .map(|j| {
-                    prototype
-                        .iter()
-                        .copied()
-                        .skip(j)
-                        .step_by(NUM_BRANCHES)
-                        .collect::<Vec<f32>>()
-                        .try_into()
-                        .unwrap()
-                })
-                .collect::<Vec<_>>()
+#[derive(Debug, Clone, PartialEq)]
+struct Filterbanks {
+    mode_s: FilterbankData,
+    mode_ac: FilterbankData,
+}
+
+fn prototype_to_bank(prototype: &[f32]) -> Filterbank {
+    (0..NUM_BRANCHES)
+        .map(|j| {
+            prototype
+                .iter()
+                .copied()
+                .skip(j)
+                .step_by(NUM_BRANCHES)
+                .collect::<Vec<f32>>()
                 .try_into()
-                .unwrap();
-            FilterbankData {
-                filterbank,
-                group_delay,
-            }
+                .unwrap()
+        })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap()
+}
+
+impl Filterbanks {
+    fn get() -> &'static Filterbanks {
+        static FILTERBANKS: OnceLock<Filterbanks> = OnceLock::new();
+        FILTERBANKS.get_or_init(|| {
+            let mode_s_prototype = build_mode_s_prototype_filter();
+            let mode_s_group_delay = compute_group_delay(&mode_s_prototype);
+            let mode_s_filterbank = prototype_to_bank(&mode_s_prototype);
+            let mode_s = FilterbankData {
+                filterbank: mode_s_filterbank,
+                group_delay: mode_s_group_delay,
+            };
+            let mode_ac_prototype = build_mode_ac_prototype_filter();
+            // Take into account that the Mode-A/C filterbank runs slightly
+            // faster than 8 Msps.
+            let mode_ac_group_delay =
+                compute_group_delay(&mode_ac_prototype) / MODE_AC_SAMP_RATE_RATIO;
+            let mode_ac_filterbank = prototype_to_bank(&mode_ac_prototype);
+            let mode_ac = FilterbankData {
+                filterbank: mode_ac_filterbank,
+                group_delay: mode_ac_group_delay,
+            };
+            Filterbanks { mode_s, mode_ac }
         })
     }
 }
@@ -78,49 +115,74 @@ fn compute_group_delay(prototype: &[f32]) -> f64 {
     (j as f64 + tau) / (NUM_BRANCHES / SPS) as f64
 }
 
-/// Returns the pulse shape filterbank.
+/// Returns the Mode-S pulse shape filterbank.
 ///
 /// Since building the filterbank is expensive, a [`OnceLock`] is used to build
 /// the filterbank on the first call only. The following calls re-use the same
 /// filterbank.
-pub fn filterbank() -> &'static Filterbank {
-    &FilterbankData::get().filterbank
+pub fn mode_s_filterbank() -> &'static Filterbank {
+    &Filterbanks::get().mode_s.filterbank
 }
 
-/// Returns the group delay of the filterbank.
+/// Returns the Mode-S group delay of the filterbank.
 ///
 /// The group delay is given in output samples refered to the interpolator
 /// output, that is, in samples at 8 Msps. Computing the group delay of the
 /// filterbank requires building the filterbank. Since that is an expensive
-/// operation, the same [`OnceLock`] that is used in [`filterbank`] is used
-/// here, so the filterbank is only built once and its groupd delay is
-/// calculated when it is built.  The following calls use the previously
-/// computed group delay value.
-pub fn group_delay() -> f64 {
-    FilterbankData::get().group_delay
+/// operation, the same [`OnceLock`] that is used in [`mode_s_filterbank`] is
+/// used here, so the filterbank is only built once and its groupd delay is
+/// calculated when it is built. The following calls use the previously computed
+/// group delay value.
+pub fn mode_s_group_delay() -> f64 {
+    Filterbanks::get().mode_s.group_delay
+}
+
+/// Returns the Mode-A/C pulse shape filterbank.
+///
+/// Since building the filterbank is expensive, a [`OnceLock`] is used to build
+/// the filterbank on the first call only. The following calls re-use the same
+/// filterbank.
+pub fn mode_ac_filterbank() -> &'static Filterbank {
+    &Filterbanks::get().mode_ac.filterbank
+}
+
+/// Returns the Mode-A/C group delay of the filterbank.
+///
+/// See [`mode_s_group_delay`].
+pub fn mode_ac_group_delay() -> f64 {
+    Filterbanks::get().mode_ac.group_delay
 }
 
 /// Applies the filterbank to a sequence of pulses.
 ///
 /// The pulses are marked as `true` elements in a boolean slice of symbols (each
 /// symbol is interpolated to [`SPS`] samples). The initial clock phase must be
-/// in the interval `[0, 1)`. Its units are output samples. A larger initial
+/// in the interval `[0, SPS)`. Its units are output samples. A larger initial
 /// clock phase means that the sequence of pulses arrives earlier in the
 /// output. The clock rate error is given in parts per one.
 ///
+/// Generally the initial clock phase will be in the interval `[0, 1)`, but in
+/// the Mode-A/C case (which uses a `clock_rate_error` significantly larger than
+/// 0), we need to use a clock phase slightly larger than 1 in some cases,
+/// because shifting the waveform by an integer sample (which is the way to use
+/// another clock phase while still obtaining the same output) corresponds to a
+/// clock phase shift of `1 + clock_rate_error`, so in some cases it is not
+/// possible to get an equivalent clock phase in `[0, 1)` by doing integer
+/// sample shifts.
+///
 /// # Panics
 ///
-/// This function panics if the initial clock phase is not in `[0, 1)`, or if
-/// `clock_rate_error.abs() > MAX_CLOCK_RATE_ERROR` (this latter constrain is in
-/// place to avoid weird behaviour such as skipping or repeating samples coming
-/// from an atypically large clock rate error).
+/// This function panics if the initial clock phase is not in `[0, SPS)`, or if
+/// `clock_rate_error.abs() > MAX_CLOCK_RATE_ERROR` (this latter constraint is
+/// in place to avoid weird behaviour such as skipping or repeating samples
+/// coming from an atypically large clock rate error).
 pub fn apply_filterbank<'a>(
     filterbank: &'a Filterbank,
     pulses: Pulses,
     initial_clock_phase: f64,
     clock_rate_error: f64,
 ) -> ApplyFilterbank<'a> {
-    assert!((0.0..1.0).contains(&initial_clock_phase));
+    assert!((0.0..SPS as f64).contains(&initial_clock_phase));
     assert!(clock_rate_error.abs() <= MAX_CLOCK_RATE_ERROR);
     ApplyFilterbank {
         filterbank,
@@ -227,9 +289,10 @@ impl<'a> ApplyFilterbank<'a> {
 ///
 /// Given a number of pulses, this function returns an upper bound for the
 /// number of samples that a call to [`apply_filterbank`] using the filterbank
-/// returned by [`filterbank`], a `pulses` array of such number of pulses, and
-/// any initial clock phase and clock rate error will generate. The bound is
-/// tight, but only for clock rate errors equal to `-MAX_CLOCK_RATE_ERROR`.
+/// returned by [`mode_s_filterbank`] of [`mode_ac_filterbank`], a `pulses`
+/// array of such number of pulses, and any initial clock phase and clock rate
+/// error will generate. The bound is tight, but only for clock rate errors
+/// equal to `-MAX_CLOCK_RATE_ERROR`.
 pub const fn required_samples_for_apply(num_pulses: usize) -> usize {
     if num_pulses == 0 {
         0
@@ -239,8 +302,14 @@ pub const fn required_samples_for_apply(num_pulses: usize) -> usize {
     }
 }
 
-fn build_prototype_filter() -> Vec<f32> {
-    let filter = convolve_full(&unfiltered_pulse(), &lowpass_filter());
+fn build_mode_s_prototype_filter() -> Vec<f32> {
+    let filter = convolve_full(&mode_s_unfiltered_pulse(), &mode_s_lowpass_filter());
+    assert_eq!(filter.len(), PROTOTYPE_LEN);
+    filter
+}
+
+fn build_mode_ac_prototype_filter() -> Vec<f32> {
+    let filter = convolve_full(&mode_ac_unfiltered_pulse(), &mode_ac_lowpass_filter());
     assert_eq!(filter.len(), PROTOTYPE_LEN);
     filter
 }
@@ -249,7 +318,6 @@ fn convolve_full(a: &[f32], b: &[f32]) -> Vec<f32> {
     let n = a.len() + b.len() - 1;
     let mut out = Vec::with_capacity(n);
     for j in 0..n {
-        // TODO: write this using iterators
         let mut conv = 0.0;
         let start = if j >= b.len() { j - b.len() + 1 } else { 0 };
         for k in start..=j.min(a.len() - 1) {
@@ -260,51 +328,68 @@ fn convolve_full(a: &[f32], b: &[f32]) -> Vec<f32> {
     out
 }
 
-/// Builds an unfiltered pulse.
+fn trapezoidal_pulse(rise_time: usize, fall_time: usize, total_len: usize) -> Vec<f32> {
+    let mut pulse = Vec::with_capacity(total_len);
+    // rising edge
+    for j in 0..rise_time {
+        pulse.push(j as f32 / rise_time as f32);
+    }
+
+    // pulse top
+    pulse.resize(total_len - fall_time, 1.0);
+
+    // falling edge
+    for j in 0..fall_time {
+        pulse.push(1.0 - (j + 1) as f32 / fall_time as f32);
+    }
+
+    assert_eq!(pulse.len(), total_len);
+    pulse
+}
+
+/// Builds a Mode-S unfiltered pulse.
 ///
-/// The pulse is based on the ADS-B specifications, and it has the following
-/// characteristics.
+/// The pulse is based on the Mode-S reply specifications, and it has the
+/// following characteristics.
 ///
 /// - 74.2 ns rise time (spec requires 50-100 ns)
 /// - 125 ns fall time (spec requires 50-200 ns)
 /// - 500 ns pulse width measured at 50% level (spec requires 500 +/- 50 ns)
-fn unfiltered_pulse() -> Vec<f32> {
-    let mut pulse = Vec::with_capacity(PULSE_TOTAL_LEN);
-
-    // rising edge
-    for j in 0..RISE_TIME {
-        pulse.push(j as f32 / RISE_TIME as f32);
-    }
-
-    // pulse top
-    pulse.resize(PULSE_TOTAL_LEN - FALL_TIME, 1.0);
-
-    // falling edge
-    for j in 0..FALL_TIME {
-        pulse.push(1.0 - (j + 1) as f32 / FALL_TIME as f32);
-    }
-
-    assert_eq!(pulse.len(), PULSE_TOTAL_LEN);
-    pulse
+fn mode_s_unfiltered_pulse() -> Vec<f32> {
+    trapezoidal_pulse(MODE_S_RISE_TIME, MODE_S_FALL_TIME, MODE_S_PULSE_TOTAL_LEN)
 }
 
-/// Builds the low-pass filter.
+/// Builds a Mode-A/C unfiltered pulse.
 ///
-/// This low-pass filter has a cutoff frequency around 4 MHz, which is the
-/// Nyquist frequency for 8 Msps IQ.
-fn lowpass_filter() -> Vec<f32> {
-    let num_taps = PROTOTYPE_LEN - PULSE_TOTAL_LEN + 1;
+/// The pulse is based on the Mode-A/C reply specifications, and it has the
+/// following characteristics.
+///
+/// - 75.5 ns rise time (spec requires 50-100 ns)
+/// - 75.5 ns fall time (spec requires 50-100 ns)
+/// - 449.3 ns pulse width measured at 50% level (spec requires 450 ns)
+///
+/// The sample rate of this pulse is 64 * 8 Msps * 1500 / 1450.
+fn mode_ac_unfiltered_pulse() -> Vec<f32> {
+    trapezoidal_pulse(
+        MODE_AC_RISE_TIME,
+        MODE_AC_FALL_TIME,
+        MODE_AC_PULSE_TOTAL_LEN,
+    )
+}
+
+fn remez_lowpass_filter(pulse_total_len: usize, cutoff: f64, max_flatness: f64) -> Vec<f32> {
+    let num_taps = PROTOTYPE_LEN - pulse_total_len + 1;
     let transition_bw = 0.4;
     let bands = [
         BandSetting::with_weight(
             0.0,
-            (2.0 - 0.5 * transition_bw) / NUM_BRANCHES as f64,
+            (cutoff - 0.5 * transition_bw) / NUM_BRANCHES as f64,
             constant(1.0),
             constant(1.0),
         )
         .unwrap(),
         BandSetting::with_weight(
-            (2.0 + 0.5 * transition_bw) / NUM_BRANCHES as f64,
+            (cutoff + 0.5 * transition_bw) / NUM_BRANCHES as f64,
             0.5,
             constant(0.0),
             constant(10.0),
@@ -313,8 +398,28 @@ fn lowpass_filter() -> Vec<f32> {
     ];
     let parameters = pm_parameters(num_taps, &bands).unwrap();
     let design = pm_remez(&parameters).unwrap();
-    assert!(design.flatness < 1e-6);
+    assert!(
+        design.flatness < max_flatness,
+        "Remez design flatness too large: {}",
+        design.flatness
+    );
     design.impulse_response.iter().map(|&x| x as f32).collect()
+}
+
+/// Builds the low-pass filter for Mode-S pulses.
+///
+/// This low-pass filter has a cutoff frequency around 4 MHz, which is the
+/// Nyquist frequency for 8 Msps IQ.
+fn mode_s_lowpass_filter() -> Vec<f32> {
+    remez_lowpass_filter(MODE_S_PULSE_TOTAL_LEN, 2.0, 1e-6)
+}
+
+/// Builds the low-pass filter for Mode-AC pulses.
+///
+/// This low-pass filter has a cutoff frequency around 4 MHz, which is the
+/// Nyquist frequency for 8 Msps IQ.
+fn mode_ac_lowpass_filter() -> Vec<f32> {
+    remez_lowpass_filter(MODE_AC_PULSE_TOTAL_LEN, 2.0 / MODE_AC_SAMP_RATE_RATIO, 2e-4)
 }
 
 #[cfg(test)]
@@ -352,10 +457,12 @@ mod test {
         assert_eq!(&conv, &expected);
     }
 
-    /// Tests that the filterbank is built without panicking.
+    /// Tests that the filterbanks are built without panicking.
     #[test]
-    fn filterbank_does_not_panic() {
-        let f = filterbank();
+    fn filterbanks_do_not_panic() {
+        let f = mode_s_filterbank();
+        assert_eq!(f.len(), NUM_BRANCHES);
+        let f = mode_ac_filterbank();
         assert_eq!(f.len(), NUM_BRANCHES);
     }
 
@@ -368,19 +475,40 @@ mod test {
 
     /// Tests the group delay calculation by checking that the rising edge is
     /// where it should be.
-    #[test]
-    fn group_delay_vs_rising_edge() {
-        let delay = group_delay();
+    #[track_caller]
+    fn group_delay_vs_rising_edge(filterbank: &Filterbank, delay: f64, samp_rate_ratio: f64) {
         let delay_int = delay as usize;
         let delay_frac = delay - delay_int as f64;
         // Set the clock phase equal to the fractional delay so that an output
         // sample is exactly aligned with the trigger level crossing.
-        let clock_phase = delay_frac;
-        let clock_rate_error = 0.0;
-        let x = apply_filterbank(filterbank(), single_pulse(), clock_phase, clock_rate_error)
-            .collect::<Vec<_>>();
+        let clock_phase = delay_frac * samp_rate_ratio;
+        let x = apply_filterbank(
+            filterbank,
+            single_pulse(),
+            clock_phase,
+            samp_rate_ratio - 1.0,
+        )
+        .collect::<Vec<_>>();
         let trigger_level = 0.5;
-        assert!((x[delay_int] - trigger_level).abs() < 1e-16);
+        assert!(
+            (x[delay_int] - trigger_level).abs() < 1e-16,
+            "x[delay_int] = {}",
+            x[delay_int]
+        );
+    }
+
+    #[test]
+    fn mode_s_group_delay_vs_rising_edge() {
+        group_delay_vs_rising_edge(mode_s_filterbank(), mode_s_group_delay(), 1.0);
+    }
+
+    #[test]
+    fn mode_ac_group_delay_vs_rising_edge() {
+        group_delay_vs_rising_edge(
+            mode_ac_filterbank(),
+            mode_ac_group_delay(),
+            MODE_AC_SAMP_RATE_RATIO,
+        );
     }
 
     proptest! {
@@ -394,7 +522,7 @@ mod test {
                 len: 0,
             };
             assert_eq!(
-                apply_filterbank(filterbank(), empty_pulses, clock_phase, clock_rate_error).next(),
+                apply_filterbank(mode_s_filterbank(), empty_pulses, clock_phase, clock_rate_error).next(),
                 None
             );
         }
@@ -403,7 +531,7 @@ mod test {
     proptest! {
         #[test]
         fn apply_filterbank_one_pulse_without_clock_error(clock_phase in 0.0..1.0) {
-            let n = apply_filterbank(filterbank(), single_pulse(), clock_phase, 0.0)
+            let n = apply_filterbank(mode_s_filterbank(), single_pulse(), clock_phase, 0.0)
                 .count();
             assert_eq!(n, SPS * TAPS_PER_BRANCH);
         }
@@ -415,7 +543,7 @@ mod test {
             clock_phase in 0.0..1.0,
             clock_rate_error in -100e-6..=100e-6
         ) {
-            let n = apply_filterbank(filterbank(), single_pulse(), clock_phase, clock_rate_error)
+            let n = apply_filterbank(mode_s_filterbank(), single_pulse(), clock_phase, clock_rate_error)
                 .count();
             // In some extreme cases depending on clock error we might get one
             // more or one fewer samples than nominal.
@@ -438,7 +566,7 @@ mod test {
             clock_rate_error in -MAX_CLOCK_RATE_ERROR..=MAX_CLOCK_RATE_ERROR,
         ) {
             use super::super::MAX_MESSAGE_PULSES;
-            let n = apply_filterbank(filterbank(), max_pulses(), clock_phase, clock_rate_error)
+            let n = apply_filterbank(mode_s_filterbank(), max_pulses(), clock_phase, clock_rate_error)
                 .count();
             assert!(n <= required_samples_for_apply(MAX_MESSAGE_PULSES));
         }
@@ -451,7 +579,7 @@ mod test {
         ) {
             use super::super::MAX_MESSAGE_PULSES;
             let clock_rate_error = -MAX_CLOCK_RATE_ERROR;
-            let n = apply_filterbank(filterbank(), max_pulses(), clock_phase, clock_rate_error)
+            let n = apply_filterbank(mode_s_filterbank(), max_pulses(), clock_phase, clock_rate_error)
                 .count();
             assert!(n <= required_samples_for_apply(MAX_MESSAGE_PULSES));
         }

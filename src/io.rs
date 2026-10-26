@@ -60,6 +60,13 @@ impl WriteComplex32 for Vec<Complex32> {
     }
 }
 
+impl<A: aligned_vec::Alignment> WriteComplex32 for aligned_vec::AVec<Complex32, A> {
+    fn write_complex32(&mut self, samples: &[Complex32]) -> Result<()> {
+        self.extend_from_slice(samples);
+        Ok(())
+    }
+}
+
 impl<W: Write> WriteComplex32 for CF32LEWriter<W> {
     fn write_complex32(&mut self, samples: &[Complex32]) -> Result<()> {
         for z in samples {
@@ -77,6 +84,22 @@ mod test {
     #[test]
     fn vec_write_complex32() {
         let mut v = Vec::<Complex32>::new();
+        let a = [
+            Complex32::new(1.0, -3.5),
+            Complex32::new(7.2, 4.3),
+            Complex32::new(0.0, 0.0),
+        ];
+        let b = [Complex32::new(-100.27, 0.0), Complex32::new(0.0, -0.0072)];
+        v.write_complex32(&a).unwrap();
+        v.write_complex32(&b).unwrap();
+        assert_eq!(v.len(), 5);
+        assert_eq!(v[..3], a);
+        assert_eq!(v[3..], b);
+    }
+
+    #[test]
+    fn avec_write_complex32() {
+        let mut v = crate::AVec::<Complex32>::new(0);
         let a = [
             Complex32::new(1.0, -3.5),
             Complex32::new(7.2, 4.3),

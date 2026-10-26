@@ -4,13 +4,17 @@
 //! of the more1090 ADS-B receiver.
 
 use crate::{
-    ADSBReceiver, CHUNK_LEN,
-    constants::dsp::SAMPLE_RATE_F64,
+    ADSBReceiver, AVec, CHUNK_LEN,
+    cli::ADSBReceiverArgs,
+    constants::dsp::{SAMPLE_RATE_F64, SAMPLE_RATE_USIZE},
     receiver::ADSBPacket,
-    simulation::{MessagesPerSecond, Simulation, distributions::MessageDistributions},
+    simulation::{
+        MessagesPerSecond, Simulation, distributions::MessageDistributions, duration_as_samples,
+    },
 };
 use anyhow::Result;
 use num::complex::Complex32;
+use rand::rngs::StdRng;
 use std::{
     sync::atomic::{AtomicU64, Ordering::Relaxed},
     thread,
@@ -29,6 +33,8 @@ pub struct ThroughputBenchmark {
     pub loop_scenario: bool,
     /// Statistics report period.
     pub report_period: Duration,
+    /// ADS-B receiver arguments.
+    pub receiver_args: ADSBReceiverArgs,
 }
 
 impl Default for ThroughputBenchmark {
@@ -39,9 +45,12 @@ impl Default for ThroughputBenchmark {
                 messages_per_second: MessagesPerSecond::from_total_messages_per_second(2000.0)
                     .unwrap(),
                 message_distributions: MessageDistributions::default(),
+                // A batch size of 1 second is good to reduce overhead.
+                batch_size: SAMPLE_RATE_USIZE,
             },
             loop_scenario: true,
             report_period: Duration::from_secs(1),
+            receiver_args: ADSBReceiverArgs::default(),
         }
     }
 }
@@ -58,16 +67,23 @@ impl ThroughputBenchmark {
             self.report_period > Duration::ZERO,
             "report period cannot be zero"
         );
-        let mut rng = rand::rng();
-        let mut iq = Vec::new();
-        self.scenario.run(&mut rng, &mut iq)?;
+        let num_samples = duration_as_samples(self.scenario.duration);
         anyhow::ensure!(
-            iq.len().is_multiple_of(CHUNK_LEN),
+            num_samples > 0,
+            "scenario duration must have a length that is a positive number of IQ samples"
+        );
+        anyhow::ensure!(
+            num_samples.is_multiple_of(u64::try_from(CHUNK_LEN).unwrap()),
             "scenario duration must have a length that is a multiple of {CHUNK_LEN} IQ samples"
         );
 
+        let mut rng: StdRng = rand::make_rng();
+        let mut iq = AVec::new(0);
+        self.scenario.run(&mut rng, &mut iq, |_| Ok(()))?;
+        assert!(iq.len().is_multiple_of(CHUNK_LEN));
+
         let runner = Runner::new();
-        let mut receiver = ADSBReceiver::new();
+        let mut receiver = self.receiver_args.new_receiver()?;
         let mut reporter = Reporter::new(Instant::now());
         if !self.loop_scenario {
             runner.run_receiver(&mut receiver, &iq, self.loop_scenario);
@@ -288,5 +304,16 @@ mod test {
             decodes_per_second: 1500.0,
         };
         assert_eq!(report, expected);
+    }
+
+    #[test]
+    fn short_benchmark() {
+        let mut benchmark = ThroughputBenchmark {
+            loop_scenario: false,
+            report_period: Duration::from_millis(1),
+            ..Default::default()
+        };
+        benchmark.scenario.duration = Duration::from_millis(10);
+        benchmark.run().unwrap();
     }
 }

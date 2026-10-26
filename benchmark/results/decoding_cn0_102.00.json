@@ -1,0 +1,57 @@
+{
+  "benchmark": {
+    "cn0": 102.0,
+    "num_packets": 100000,
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "avg_cn0_error": -1.2447701179504393,
+    "avg_decode_time_error": -0.021960151858401396,
+    "avg_detection_time_error": -15.40973434163847,
+    "decode_probability": 1.0,
+    "decode_probability_noncoherent": 0.0,
+    "decode_probability_one_bit_error": 0.0,
+    "decode_probability_two_bit_errors": 0.0,
+    "decode_probability_zero_bit_errors": 1.0,
+    "decode_wrong_probability": 0.0,
+    "decode_wrong_probability_noncoherent": null,
+    "decode_wrong_probability_one_bit_error": 0.0,
+    "decode_wrong_probability_two_bit_errors": 0.0,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "detection_probability": 1.0,
+    "max_cn0_error": 2.949188232421875,
+    "max_decode_time_error": 0.11699684330278615,
+    "max_detection_time_error": 83.72432180070155,
+    "max_frequency_error": 60.2035454831348,
+    "num_decoded": 100000,
+    "num_decoded_noncoherent": 0,
+    "num_decoded_one_bit_error": 0,
+    "num_decoded_two_bit_errors": 0,
+    "num_decoded_wrong": 0,
+    "num_decoded_wrong_noncoherent": 0,
+    "num_decoded_wrong_one_bit_error": 0,
+    "num_decoded_wrong_two_bit_errors": 0,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 100000,
+    "num_detections": 100000,
+    "num_packets": 100000,
+    "real_time_duration": {
+      "nanos": 377997850,
+      "secs": 4
+    },
+    "rms_frequency_error": 25.304624030305895,
+    "std_cn0_error": 0.49860594891460597,
+    "std_decode_time_error": 0.05179125901639512,
+    "std_detection_time_error": 36.992629738321696,
+    "thread_throughput_sps": 11877575.499494592,
+    "throughput_sps": 190041207.99191347
+  }
+}

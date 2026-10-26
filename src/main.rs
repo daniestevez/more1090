@@ -3,23 +3,22 @@
 use anyhow::{Context, Result};
 use clap::{ArgGroup, Parser};
 use more1090::{
-    ADSBReceiver, CHUNK_LEN,
-    cli::try_bit_errors_into_error_correction_level,
+    A, CHUNK_LEN,
+    cli::ADSBReceiverArgs,
     constants::dsp::{CARRIER_FREQUENCY, SAMPLE_RATE_F64},
     mode_s::format_avr,
-    receiver::ErrorCorrectionLevel,
     sigmf::{self, SigMFMeta},
 };
 use num::complex::Complex32;
 use std::{
-    fs::File,
-    io::{BufReader, Read},
+    fs::{File, OpenOptions},
+    io::{BufReader, ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
 
 /// ADS-B receiver CLI arguments.
 #[derive(Debug, Clone, PartialEq, Parser)]
-#[command(version, about, long_about = "more1090 ADS-B receiver",
+#[command(version, about = "more1090 ADS-B receiver",
           group(ArgGroup::new("input").args(["sigmf_file", "stdin"]).required(true)))]
 pub struct Args {
     /// SigMF file to decode.
@@ -44,32 +43,8 @@ pub struct Args {
     /// a previous run over the same file) are cleared.
     #[arg(long)]
     clear_annotations: bool,
-    /// Error correction level.
-    ///
-    /// This sets the maximum number of bit errors that the ADS-B decoder is
-    /// allowed to correct. The maximum correction level allowed is 2 bits.
-    #[arg(long, default_value = "2", value_parser = try_bit_errors_into_error_correction_level)]
-    error_correction_level: ErrorCorrectionLevel,
-    /// Carrier metric threshold.
-    ///
-    /// This sets the threshold used for carrier detection. The provided default
-    /// value is generally a good choice.
-    #[arg(long, default_value_t = more1090::constants::dsp::CARRIER_METRIC_THRESHOLD)]
-    carrier_metric_threshold: f32,
-    /// Preamble metric threshold.
-    ///
-    /// This sets the threshold used for preamble validation in messages with 2
-    /// bit errors. The provided default is generally a good choice.
-    #[arg(long, default_value_t = more1090::constants::dsp::PREAMBLE_METRIC_THRESHOLD)]
-    preamble_metric_threshold: f32,
-}
-
-fn setup_receiver(args: &Args) -> Result<ADSBReceiver> {
-    let mut receiver = ADSBReceiver::new();
-    receiver.set_error_correction_level(args.error_correction_level);
-    receiver.set_carrier_metric_threshold(args.carrier_metric_threshold)?;
-    receiver.set_preamble_metric_threshold(args.preamble_metric_threshold)?;
-    Ok(receiver)
+    #[command(flatten)]
+    receiver_args: ADSBReceiverArgs,
 }
 
 fn decode_sigmf<P: AsRef<Path>>(args: &Args, sigmf_file: P) -> Result<()> {
@@ -98,7 +73,7 @@ fn decode_sigmf<P: AsRef<Path>>(args: &Args, sigmf_file: P) -> Result<()> {
         meta.clear_annotations_generator(sigmf::GENERATOR);
     }
 
-    let mut receiver = setup_receiver(args)?;
+    let mut receiver = args.receiver_args.new_receiver()?;
 
     let sigmf_data =
         File::open(sigmf::data_path(&sigmf_file)?).context("failed to open sigmf-data file")?;
@@ -137,8 +112,67 @@ fn decode_sigmf<P: AsRef<Path>>(args: &Args, sigmf_file: P) -> Result<()> {
         _ => unreachable!(),
     }
 
-    meta.to_file(meta_path)?;
+    write_sigmf_meta(meta_path, &meta)?;
+    Ok(())
+}
 
+// Overwrite a .sigmf-meta file atomically by first writing to a temporary file
+// and then renaming it.
+//
+// The strategy to generate a temporary file path is to append the extension
+// tmp. Since a file at this temporary file path may already exist, we iterate
+// until we find a path for which we can create a new file with exclusive access
+// at that path.
+fn write_sigmf_meta<P: AsRef<Path>>(meta_path: P, meta: &SigMFMeta) -> Result<()> {
+    let mut tmp_meta_path = meta_path.as_ref().to_path_buf();
+    let tmpfile = loop {
+        let added = tmp_meta_path.add_extension("tmp");
+        anyhow::ensure!(
+            added,
+            "failed to add extension to {}",
+            tmp_meta_path.display()
+        );
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_meta_path)
+        {
+            Ok(f) => break f,
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
+            Err(err) => {
+                Err(err).with_context(|| format!("failed to create {}", tmp_meta_path.display()))?
+            }
+        }
+    };
+
+    // this is written as a function to allow us to delete tmpfile as clean up
+    // on any error
+    fn write_and_rename<P: AsRef<Path>, Q: AsRef<Path>>(
+        meta_path: P,
+        tmp_meta_path: Q,
+        meta: &SigMFMeta,
+        mut tmpfile: File,
+    ) -> Result<()> {
+        meta.write(&mut tmpfile)?;
+        tmpfile
+            .sync_all()
+            .with_context(|| format!("failed to sync {}", tmp_meta_path.as_ref().display()))?;
+        drop(tmpfile);
+        std::fs::rename(&tmp_meta_path, &meta_path).with_context(|| {
+            format!(
+                "failed to rename {} to {}",
+                tmp_meta_path.as_ref().display(),
+                meta_path.as_ref().display()
+            )
+        })?;
+        Ok(())
+    }
+
+    if let Err(err) = write_and_rename(meta_path, &tmp_meta_path, meta, tmpfile) {
+        // ignore the error when removing, since we are handling another error
+        let _ = std::fs::remove_file(tmp_meta_path);
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -153,11 +187,11 @@ const _: () = {
 };
 
 fn decode_stdin(args: &Args) -> Result<()> {
-    let mut receiver = setup_receiver(args)?;
-    let stdin = std::io::stdin();
-    let mut handle = stdin.lock();
+    let mut receiver = args.receiver_args.new_receiver()?;
+    let mut stdin_handle = std::io::stdin().lock();
+    let mut stdout_handle = std::io::stdout().lock();
     const BUFSIZE: usize = 80_000; // 10 milliseconds
-    let mut buffer: more1090::A<[Complex32; BUFSIZE]> = aligned::Aligned([Complex32::default(); _]);
+    let mut buffer: A<[Complex32; BUFSIZE]> = aligned::Aligned([Complex32::default(); _]);
     loop {
         {
             // SAFETY: it is safe to view the buffer as a slice of u8's and to read
@@ -169,7 +203,7 @@ fn decode_stdin(args: &Args) -> Result<()> {
                     BUFSIZE * std::mem::size_of::<Complex32>(),
                 )
             };
-            if let Err(err) = handle.read_exact(s) {
+            if let Err(err) = stdin_handle.read_exact(s) {
                 if err.kind() == std::io::ErrorKind::UnexpectedEof {
                     // Note that this drops up to 10 milliseconds of input when
                     // reaching EOF. This is acceptable, because the main use
@@ -185,7 +219,8 @@ fn decode_stdin(args: &Args) -> Result<()> {
             if let Some(packet) = receiver.process_chunk(chunk)
                 && let Some(decode) = &packet.decode
             {
-                println!("{}", format_avr(&decode.message));
+                writeln!(stdout_handle, "{}", format_avr(&decode.message))
+                    .context("failed to write to stdout")?;
             }
         }
     }

@@ -7,7 +7,7 @@ use crate::{
     circbuf::CircBuf,
     constants::{
         dsp::*,
-        mode_s::{MODE_S_LONG_BITS, MODE_S_LONG_BYTES, REPLY_PREAMBLE_BITS},
+        mode_s::{MODE_S_LONG_BITS, MODE_S_LONG_BYTES},
     },
     math::AlgebraicComplex,
     mode_s::{double_bit_error_from_crc24, single_bit_error_from_crc24},
@@ -16,22 +16,41 @@ use anyhow::Result;
 use generic_array::typenum::{self, marker_traits::Unsigned};
 use num::complex::Complex32;
 use rustfft::{Fft, FftPlanner};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 mod kernels;
 use kernels::*;
 
-/// Preferred alignment for SIMD data.
+/// Preferred alignment for SIMD arrays.
 ///
 /// This type indicates the preferred alignment for SIMD data using the
-/// [`aligned`] crate.
+/// [`aligned`] crate to define aligned arrays.
 pub type Align = aligned::A64;
+
+/// Preferred alignmend for SIMD data.
+///
+/// This constant indicates the preferred alignment for SIMD data, as a constant
+/// in bytes.
+pub const ALIGN: usize = <Align as aligned::Alignment>::ALIGN;
+
+/// Preferred alignment for SIMD vectors.
+///
+/// This type indicates the preferred alignment for SIMD data using the
+/// [`aligned_vec`] crate to define aligned vectors.
+pub type AlignVec = aligned_vec::ConstAlign<ALIGN>;
 
 /// Data aligned to [`Align`] alignment.
 ///
 /// This type aligns data to the preferred alignment for SIMD data using the
 /// [`aligned`] crate.
 pub type A<T> = aligned::Aligned<Align, T>;
+
+/// Vector aligned to [`AlignVec`] alignment.
+///
+/// This type aligns a vector to the preferred alignment for SIMD data using the
+/// [`aligned_vec`] crate.
+pub type AVec<T> = aligned_vec::AVec<T, AlignVec>;
 
 /// ADS-B receiver.
 ///
@@ -43,7 +62,9 @@ pub type A<T> = aligned::Aligned<Align, T>;
 pub struct ADSBReceiver {
     error_correction_level: ErrorCorrectionLevel,
     carrier_metric_threshold: f32,
-    preamble_metric_threshold: f32,
+    cn0_threshold: f32,
+    noncoherent_high_hamming_distance: u32,
+    noncoherent_high_hamming_cn0_threshold: f32,
     fft: Arc<dyn Fft<f32>>,
     // The real parts and imaginary parts are separated into two different
     // sub-arrays, as this is advantageous for vectorization of IQ x LO.
@@ -178,7 +199,7 @@ pub struct ADSBDecode {
 ///
 /// This enum is used to indicate the maximum number of bit errors that the
 /// ADS-B decoder tries to correct in a message.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum ErrorCorrectionLevel {
     /// No bit errors.
     NoErrors,
@@ -277,7 +298,9 @@ impl ADSBReceiver {
         ADSBReceiver {
             error_correction_level: ErrorCorrectionLevel::DoubleError,
             carrier_metric_threshold: CARRIER_METRIC_THRESHOLD,
-            preamble_metric_threshold: PREAMBLE_METRIC_THRESHOLD,
+            cn0_threshold: CN0_THRESHOLD,
+            noncoherent_high_hamming_distance: NONCOHERENT_HIGH_HAMMING_DISTANCE,
+            noncoherent_high_hamming_cn0_threshold: NONCOHERENT_HIGH_HAMMING_CN0_THRESHOLD,
             fft,
             freq_bin_lo: make_freq_bin_lo(),
             fft_buf: Box::new(aligned::Aligned([Complex32::default(); NUM_FREQ_BINS])),
@@ -334,31 +357,76 @@ impl ADSBReceiver {
         Ok(())
     }
 
-    /// Returns the current preamble metric threshold for preamble validation.
+    /// Returns the current CN0 threshold in dB·Hz for preamble validation.
     ///
-    /// The default is [`PREAMBLE_METRIC_THRESHOLD`]. This metric is used to
-    /// validate the preamble for messages with 2 or more corrected bit
-    /// errors. It is a mechanism to reduce the number of false decodes caused
-    /// by message misalignment.
-    pub fn preamble_metric_threshold(&self) -> f32 {
-        self.preamble_metric_threshold
+    /// The default is [`CN0_THRESHOLD`]. This metric is used to validate the
+    /// preamble for messages with 2 or more corrected bit errors. It is a
+    /// mechanism to reduce the number of false decodes caused by message
+    /// misalignment and false detections on interference.
+    pub fn cn0_threshold(&self) -> f32 {
+        self.cn0_threshold
     }
 
-    /// Sets the current preamble metric threshold.
+    fn check_cn0_threshold(cn0_threshold: f32) -> Result<()> {
+        anyhow::ensure!(
+            cn0_threshold.is_finite(),
+            "CN0 threshold {cn0_threshold} must be finite"
+        );
+        Ok(())
+    }
+
+    /// Sets the current CN0 threshold in dB·Hz.
     ///
-    /// See [`preamble_metric_threshold`](Self::preamble_metric_threshold). An
-    /// error is returned if the `preamble_metric_threshold` is negative or not
+    /// See [`cn0_threshold`](Self::cn0_threshold). An
+    /// error is returned if the `cn0_threshold` is negative or not
     /// finite.
-    pub fn set_preamble_metric_threshold(&mut self, preamble_metric_threshold: f32) -> Result<()> {
-        anyhow::ensure!(
-            preamble_metric_threshold.is_finite(),
-            "preamble metric threshold {preamble_metric_threshold} must be finite"
-        );
-        anyhow::ensure!(
-            preamble_metric_threshold >= 0.0,
-            "preamble metric threshold {preamble_metric_threshold} must be non-negative"
-        );
-        self.preamble_metric_threshold = preamble_metric_threshold;
+    pub fn set_cn0_threshold(&mut self, cn0_threshold: f32) -> Result<()> {
+        Self::check_cn0_threshold(cn0_threshold)?;
+        self.cn0_threshold = cn0_threshold;
+        Ok(())
+    }
+
+    /// Returns the current Hamming distance threshold for rejection of 2-bit
+    /// error noncoherent decodes.
+    ///
+    /// The default is [`NONCOHERENT_HIGH_HAMMING_DISTANCE`]. In order to reduce
+    /// the number of false decodes, for a noncoherent decode candidate with 2
+    /// bit errors, the receiver computes the Hamming distance between the
+    /// coherent and noncoherent demodulations corresponding to that
+    /// candidate. If the distance is greater or equal than this threshold, then
+    /// the CN0 test is done against a higher threshold
+    /// ([`noncoherent_high_hamming_cn0_threshold`](Self::noncoherent_high_hamming_cn0_threshold)).
+    pub fn noncoherent_high_hamming_distance(&self) -> u32 {
+        self.noncoherent_high_hamming_distance
+    }
+
+    /// Sets the current Hamming distance threshold for rejection of 2-bit error
+    /// noncoherent decodes.
+    ///
+    /// See
+    /// [`noncoherent_hamming_distance`](Self::noncoherent_high_hamming_distance).
+    pub fn set_noncoherent_high_hamming_distance(&mut self, hamming_distance: u32) -> Result<()> {
+        self.noncoherent_high_hamming_distance = hamming_distance;
+        Ok(())
+    }
+
+    /// Returns the current increased CN0 threshold in dB·Hz for rejection of
+    /// 2-bit error noncoherent decodes.
+    ///
+    /// See
+    /// [`noncoherent_hamming_distance`](Self::noncoherent_high_hamming_distance).
+    pub fn noncoherent_high_hamming_cn0_threshold(&self) -> f32 {
+        self.noncoherent_high_hamming_cn0_threshold
+    }
+
+    /// Sets the current increased CN0 threshold in dB·Hz for rejection of 2-bit
+    /// error noncoherent decodes.
+    ///
+    /// See
+    /// [`noncoherent_hamming_distance`](Self::noncoherent_high_hamming_distance).
+    pub fn set_noncoherent_high_hamming_cn0_threshold(&mut self, cn0_threshold: f32) -> Result<()> {
+        Self::check_cn0_threshold(cn0_threshold)?;
+        self.noncoherent_high_hamming_cn0_threshold = cn0_threshold;
         Ok(())
     }
 
@@ -483,17 +551,32 @@ impl ADSBReceiver {
     }
 
     fn check_local_maximum(&self, long_fft_idx: u64) -> bool {
+        // In order to ensure that detections are at least LOCAL_MAX_WINDOW + 1
+        // time steps apart in all cases (even if the input is a constant stream
+        // of zeros), we require a < check with the window preceding this time
+        // step and a <= check with the window following this time step. This
+        // kind of check triggers on the first time step of a perfectly flat
+        // plateau, but not on the remaining steps of the plateau.
+        let this_max = self.long_ffts[long_fft_idx].max_value;
         let (w0, w1) = self
             .long_ffts
-            .get(long_fft_idx - LOCAL_MAX_WINDOW..=long_fft_idx + LOCAL_MAX_WINDOW)
+            .get(long_fft_idx - LOCAL_MAX_WINDOW..long_fft_idx)
             .unwrap();
-        let mut window_max = 0.0;
         for fft in w0.iter().chain(w1.iter()) {
-            if fft.max_value > window_max {
-                window_max = fft.max_value;
+            if fft.max_value >= this_max {
+                return false;
             }
         }
-        self.long_ffts[long_fft_idx].max_value == window_max
+        let (w0, w1) = self
+            .long_ffts
+            .get(long_fft_idx + 1..=long_fft_idx + LOCAL_MAX_WINDOW)
+            .unwrap();
+        for fft in w0.iter().chain(w1.iter()) {
+            if fft.max_value > this_max {
+                return false;
+            }
+        }
+        true
     }
 
     fn check_carrier_metric(&self, long_fft_idx: u64) -> Option<f32> {
@@ -548,56 +631,48 @@ impl ADSBReceiver {
             demodulate(symbols, coherent, noncoherent);
         }
 
-        let carrier_power = self.packet.detection.carrier_power;
-        let Some(location) = self.find_best_decode_candidate(carrier_power) else {
+        let Some(decode) = self.find_best_decode_candidate() else {
             self.packet.decode = None;
             return;
-        };
-        let demod = match location.demodulation {
-            DemodulationType::Coherent => &self.coherent_demod,
-            DemodulationType::NonCoherent => &self.noncoherent_demod,
         };
         let mut sample_index = self.packet.detection.sample_index
             - u64::try_from(LEFT_MARGIN).unwrap()
             + u64::try_from(
-                SPS * (2 * location.bit_offset + location.sym_offset) + location.clock_phase,
+                SPS * (2 * decode.location.bit_offset + decode.location.sym_offset)
+                    + decode.location.clock_phase,
             )
             .unwrap();
-        let mut message = extract_message(
-            &demod[location.clock_phase][location.sym_offset],
-            location.bit_offset,
-        );
-        correct_message_bit_errors(&mut message, location.corrected_errors);
-        let estimates = self.postdecode_estimates(&message, &location);
+        let subsample_timing = self.subsample_timing(&decode);
         // The reference point for the sample index is the 50% of the rising
         // edge of the first bit, but the receiver subsample timing gives zero
         // (equal early and late powers) when the 50% level is exactly halfway
         // between sample_index - 1 and sample_index. This means that we need to
         // subtract 0.5 samples to the subsample timing.
-        let mut sample_index_frac = estimates.subsample_timing - 0.5;
-        if sample_index_frac < -0.5 {
-            sample_index -= 1;
-            sample_index_frac += 1.0;
-        } else if sample_index_frac >= 0.5 {
-            sample_index += 1;
-            sample_index_frac -= 1.0;
+        let mut sample_index_frac = subsample_timing - 0.5;
+        loop {
+            if sample_index_frac < -0.5 {
+                sample_index -= 1;
+                sample_index_frac += 1.0;
+            } else if sample_index_frac >= 0.5 {
+                sample_index += 1;
+                sample_index_frac -= 1.0;
+            } else {
+                break;
+            }
         }
-        debug_assert!((-0.5..0.5).contains(&sample_index_frac));
         self.packet.decode = Some(ADSBDecode {
             sample_index,
             sample_index_frac,
-            message,
-            corrected_errors: location.corrected_errors,
-            demodulation: location.demodulation,
-            cn0_db: estimates.cn0_db,
+            message: decode.message,
+            corrected_errors: decode.location.corrected_errors,
+            demodulation: decode.location.demodulation,
+            cn0_db: decode.cn0,
         });
     }
 
-    fn find_best_decode_candidate(&self, carrier_power: f32) -> Option<DecodeLocation> {
-        let preamble_corr_threshold = self.preamble_metric_threshold * carrier_power;
+    fn find_best_decode_candidate(&self) -> Option<DecodeCandidate> {
         const PACKET_WINDOW_BITS: usize = 8 * PACKET_WINDOW_BYTES;
-        let mut best_preamble_corr = 0.0;
-        let mut best_location: Option<DecodeLocation> = None;
+        let mut best_candidate: Option<DecodeCandidate> = None;
         // Technically the maximum offset that we could use in these loops to
         // avoid going out of bounds (including in the late correlator
         // calculation), is
@@ -610,55 +685,44 @@ impl ADSBReceiver {
         // space), and stop at
         // (PACKET_WINDOW_BITS - MODE_S_LONG_BITS - 1, SPS - 1, 1).
         //
-        // The start of this range, bit_offset = REPLY_PREAMBLE_BITS, comes from
-        // the requirement to avoid out-of-bounds when computing preamble_loc
-        // below.
-        for bit_offset in REPLY_PREAMBLE_BITS..PACKET_WINDOW_BITS - MODE_S_LONG_BITS {
+        // The start of this range, bit_offset = 1, comes from the requirement
+        // to walk backwards up to 2 clock phases in subsample_timing(). For
+        // simplicity, we leave 1 bit of headroom instead of 2 clock phases.
+        for bit_offset in 1..PACKET_WINDOW_BITS - MODE_S_LONG_BITS {
             for clock_phase in 0..SPS {
                 for sym_offset in 0..2 {
                     if let Some(location) = self.try_decode(bit_offset, clock_phase, sym_offset) {
-                        const PREAMBLE_SYMBOLS: usize = 2 * REPLY_PREAMBLE_BITS;
-                        let preamble_loc = 2 * bit_offset + sym_offset - PREAMBLE_SYMBOLS;
-                        let corr = preamble_corr(
-                            self.symbols[clock_phase]
-                                [preamble_loc..preamble_loc + PREAMBLE_MASK_LEN]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        // To cut down false decodes, if there are 2 or more bit
-                        // errors we require the preamble correlation to be
-                        // above a quality metric threshold.
-                        if location.corrected_errors.num_errors() >= 2
-                            && corr < preamble_corr_threshold
-                        {
+                        let message = self.message_from_location(&location);
+                        let prompt_power =
+                            postdecode_power(self.symbols_for_location(&location), &message);
+                        let cn0 = self.estimate_cn0(&message, &location, prompt_power);
+                        let candidate = DecodeCandidate {
+                            location,
+                            message,
+                            prompt_power,
+                            cn0,
+                        };
+                        if self.filter_out_decode_candidate(cn0, &location, || {
+                            compute_hamming_distance(
+                                &self.coherent_demod[clock_phase][sym_offset],
+                                &self.noncoherent_demod[clock_phase][sym_offset],
+                                bit_offset,
+                            )
+                        }) {
                             continue;
                         }
+
                         // The best location is chosen according to what gives
                         // the largest value for lexicographic order in
-                        // (-num_errors, preamble_corr).
-                        if best_location.is_none()
-                            || (
-                                std::cmp::Reverse(location.corrected_errors.num_errors()),
-                                corr,
-                            ) > (
-                                std::cmp::Reverse(
-                                    best_location
-                                        .as_ref()
-                                        .unwrap()
-                                        .corrected_errors
-                                        .num_errors(),
-                                ),
-                                best_preamble_corr,
-                            )
-                        {
-                            best_preamble_corr = corr;
-                            best_location = Some(location)
+                        // (-num_errors, cn0).
+                        if best_candidate.map(|bc| candidate > bc).unwrap_or(true) {
+                            best_candidate = Some(candidate);
                         }
                     }
                 }
             }
         }
-        best_location
+        best_candidate
     }
 
     fn try_decode(
@@ -765,19 +829,104 @@ impl ADSBReceiver {
         None
     }
 
-    fn postdecode_estimates(
+    fn message_from_location(&self, location: &DecodeLocation) -> [u8; MODE_S_LONG_BYTES] {
+        let demod = match location.demodulation {
+            DemodulationType::Coherent => &self.coherent_demod,
+            DemodulationType::NonCoherent => &self.noncoherent_demod,
+        };
+        let mut message = extract_message(
+            &demod[location.clock_phase][location.sym_offset],
+            location.bit_offset,
+        );
+        correct_message_bit_errors(&mut message, location.corrected_errors);
+        message
+    }
+
+    fn estimate_cn0(
         &self,
         message: &[u8; MODE_S_LONG_BYTES],
         location: &DecodeLocation,
-    ) -> PostdecodeEstimates {
-        let prompt_power = postdecode_power(self.symbols_for_location(location), message);
+        prompt_power: f32,
+    ) -> f32 {
+        let noise_power = postdecode_noise_power(self.samples_for_location(location), message);
+        // The noise power measurement has 2 samples of coherent integration,
+        // while the prompt power has 4 samples of coherent integration. The
+        // noncoherent integration length is the same in both cases. Therefore,
+        // prompt_power / (2 * noise_power) is an estimate for (S+N)/N, and from
+        // there we can estimate the CN0.
+        let noise = 2.0 * noise_power;
+        let signal = (prompt_power - noise).max(0.0);
+        let sn = signal / noise;
+        // Due to the coherent integration of length SPS done in the
+        // prompt_power, the noise bandwidth here is SAMPLE_RATE / SPS.
+        const SCALE_FACTOR: f32 = SAMPLE_RATE_F32 / SPS as f32;
+        10.0 * (sn * SCALE_FACTOR).log10()
+    }
+
+    // // A closure is used for the Hamming distance to avoid computing it when not
+    // // needed, and to allow table-testing of this logic.
+    fn filter_out_decode_candidate<F: Fn() -> u32>(
+        &self,
+        cn0: f32,
+        location: &DecodeLocation,
+        hamming_distance: F,
+    ) -> bool {
+        // To cut down false decodes, if there are 2 or more bit errors we
+        // require the CN0 to be above a threshold.
+        let num_errors = location.corrected_errors.num_errors();
+        if num_errors >= 2 && cn0 < self.cn0_threshold {
+            return true;
+        }
+        // An additional check to cut down false decodes is as follows. If the
+        // Hamming distance between the noncoherent and coherent decodes is
+        // large, then we are either in one or two situations: carrier recovery
+        // failed, so the coherent decode is garbage, or we are testing at a
+        // wrong alignment, in which case the coherent and noncoherent decodes
+        // tend to differ in symbols that contain noise only. Since about half
+        // of the false decodes with 2 bit errors use noncoherent demodulation,
+        // we can cut these down by requiring a CN0 when the demodulation is
+        // noncoherent and the Hamming distance is large.
+        if num_errors >= 2
+            && location.demodulation == DemodulationType::NonCoherent
+            && cn0 < self.noncoherent_high_hamming_cn0_threshold
+        // Put the hamming distance check the last in the AND chain, since the
+        // on-demand calculation costs more than the rest of the checks
+            && hamming_distance() >= self.noncoherent_high_hamming_distance
+        {
+            return true;
+        }
+        false
+    }
+
+    fn subsample_timing(&self, decode: &DecodeCandidate) -> f32 {
+        // Because the decode candidate might have been produced at a clock
+        // phase that is slightly offset from the optimal (which happens mainly
+        // in cases when the optimal phase failed to be a decoding candidate),
+        // we first refine a the prompt location by looking at the adjacent
+        // clock phases and picking the one with maximum power.
+        let mut prompt_phase = decode.location;
+        let mut prompt_power = decode.prompt_power;
+        let mut prompt_offset = 0.0;
+        for (candidate_phase, offset) in [
+            (decode.location.previous_clock_phase(), -1.0),
+            (decode.location.next_clock_phase(), 1.0),
+        ] {
+            let candidate_power =
+                postdecode_power(self.symbols_for_location(&candidate_phase), &decode.message);
+            if candidate_power > prompt_power {
+                prompt_phase = candidate_phase;
+                prompt_power = candidate_power;
+                prompt_offset = offset;
+            }
+        }
+
         let early_power = postdecode_power(
-            self.symbols_for_location(&location.previous_clock_phase()),
-            message,
+            self.symbols_for_location(&prompt_phase.previous_clock_phase()),
+            &decode.message,
         );
         let late_power = postdecode_power(
-            self.symbols_for_location(&location.next_clock_phase()),
-            message,
+            self.symbols_for_location(&prompt_phase.next_clock_phase()),
+            &decode.message,
         );
         let subsample_timing = parabolic_interpolation([early_power, prompt_power, late_power]);
         // We don't have a guarantee that prompt_power is larger than
@@ -786,24 +935,7 @@ impl ADSBReceiver {
         // because if decoding chose `location` as the best candidate, the true
         // timing cannot be much further off than one sample.
         let subsample_timing = subsample_timing.clamp(-1.0, 1.0);
-
-        let noise_power = postdecode_noise_power(self.samples_for_location(location), message);
-        // The noise power measurement has the same coherent integration length
-        // as the prompt_power measurement, but the noncoherent integration
-        // length is a factor of two shorter. Therefore, prompt_power / (2 *
-        // noise_power) is an estimate for (S+N)/N, and from there we can estimate the CN0.
-        let noise = 2.0 * noise_power;
-        let signal = (prompt_power - noise).max(0.0);
-        let sn = signal / noise;
-        // Due to the coherent integration of length SPS done in the
-        // noise_power, the noise bandwidth here is SAMPLE_RATE / SPS.
-        const SCALE_FACTOR: f32 = SAMPLE_RATE_F32 / SPS as f32;
-        let cn0_db = 10.0 * (sn * SCALE_FACTOR).log10();
-
-        PostdecodeEstimates {
-            subsample_timing,
-            cn0_db,
-        }
+        subsample_timing + prompt_offset
     }
 
     fn samples_for_location(&self, location: &DecodeLocation) -> &[Complex32; MODE_S_LONG_SAMPLES] {
@@ -828,6 +960,27 @@ struct DecodeLocation {
     sym_offset: usize,
     corrected_errors: BitErrors,
     demodulation: DemodulationType,
+}
+
+#[derive(Debug, Copy, PartialEq, Clone)]
+struct DecodeCandidate {
+    location: DecodeLocation,
+    message: [u8; MODE_S_LONG_BYTES],
+    prompt_power: f32,
+    cn0: f32,
+}
+
+impl PartialOrd for DecodeCandidate {
+    fn partial_cmp(&self, other: &DecodeCandidate) -> Option<std::cmp::Ordering> {
+        (
+            std::cmp::Reverse(self.location.corrected_errors.num_errors()),
+            self.cn0,
+        )
+            .partial_cmp(&(
+                std::cmp::Reverse(other.location.corrected_errors.num_errors()),
+                other.cn0,
+            ))
+    }
 }
 
 impl DecodeLocation {
@@ -879,22 +1032,24 @@ impl DecodeLocation {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-struct PostdecodeEstimates {
-    subsample_timing: f32,
-    cn0_db: f32,
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::constants::dsp::NFFT_LONG;
+    use crate::{
+        constants::dsp::NFFT_LONG,
+        mode_s::ModeSMessage,
+        simulation::{
+            MessageConfig, MessageType, SSRReply, SingleMessageSimulation,
+            distributions::{CN0Distribution, ConstantCN0, MessageDistributions},
+            rng::rng_from_seed,
+        },
+    };
     use proptest::prelude::*;
-    use std::f64::consts::PI;
+    use std::{f64::consts::PI, time::Duration};
 
     prop_compose! {
         fn any_decode_location()(
-            bit_offset in REPLY_PREAMBLE_BITS..8 * PACKET_WINDOW_BYTES - MODE_S_LONG_BITS,
+            bit_offset in 1..8 * PACKET_WINDOW_BYTES - MODE_S_LONG_BITS,
             clock_phase in 0..SPS,
             sym_offset in 0_usize..2,
             corrected_errors: BitErrors,
@@ -979,6 +1134,11 @@ mod test {
         POSITIVE | ZERO | SUBNORMAL
     }
 
+    fn any_cn0() -> proptest::num::f32::Any {
+        use proptest::num::f32::{NEGATIVE, POSITIVE, SUBNORMAL, ZERO};
+        POSITIVE | NEGATIVE | ZERO | SUBNORMAL
+    }
+
     #[test]
     fn set_carrier_metric_threshold_rejects_invalid() {
         let mut receiver = ADSBReceiver::new();
@@ -1006,28 +1166,59 @@ mod test {
     }
 
     #[test]
-    fn set_preamble_metric_threshold_rejects_invalid() {
+    fn set_cn0_threshold_rejects_invalid() {
         let mut receiver = ADSBReceiver::new();
-        assert!(receiver.set_preamble_metric_threshold(f32::NAN).is_err());
-        assert!(
-            receiver
-                .set_preamble_metric_threshold(f32::INFINITY)
-                .is_err()
-        );
-        assert!(
-            receiver
-                .set_preamble_metric_threshold(f32::NEG_INFINITY)
-                .is_err()
-        );
-        assert!(receiver.set_preamble_metric_threshold(-1.0).is_err());
+        assert!(receiver.set_cn0_threshold(f32::NAN).is_err());
+        assert!(receiver.set_cn0_threshold(f32::INFINITY).is_err());
+        assert!(receiver.set_cn0_threshold(f32::NEG_INFINITY).is_err());
     }
 
     proptest! {
         #[test]
-        fn set_preamble_metric_threshold_accepts_valid(threshold in any_threshold()) {
+        fn set_cn0_threshold_accepts_valid(threshold in any_cn0()) {
             let mut receiver = ADSBReceiver::new();
-            receiver.set_preamble_metric_threshold(threshold).unwrap();
-            assert_eq!(receiver.preamble_metric_threshold(), threshold);
+            receiver.set_cn0_threshold(threshold).unwrap();
+            assert_eq!(receiver.cn0_threshold(), threshold);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn set_noncoherent_high_hamming_distance_accepts_any(distance: u32) {
+            let mut receiver = ADSBReceiver::new();
+            receiver.set_noncoherent_high_hamming_distance(distance).unwrap();
+            assert_eq!(receiver.noncoherent_high_hamming_distance(), distance);
+        }
+    }
+
+    #[test]
+    fn set_noncoherent_high_hamming_cn0_threshold_rejects_invalid() {
+        let mut receiver = ADSBReceiver::new();
+        assert!(
+            receiver
+                .set_noncoherent_high_hamming_cn0_threshold(f32::NAN)
+                .is_err()
+        );
+        assert!(
+            receiver
+                .set_noncoherent_high_hamming_cn0_threshold(f32::INFINITY)
+                .is_err()
+        );
+        assert!(
+            receiver
+                .set_noncoherent_high_hamming_cn0_threshold(f32::NEG_INFINITY)
+                .is_err()
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn set_noncoherent_high_hamming_cn0_threshold_accepts_valid(
+            threshold in any_cn0()
+        ) {
+            let mut receiver = ADSBReceiver::new();
+            receiver.set_noncoherent_high_hamming_cn0_threshold(threshold).unwrap();
+            assert_eq!(receiver.noncoherent_high_hamming_cn0_threshold(), threshold);
         }
     }
 
@@ -1170,32 +1361,50 @@ mod test {
         }
     }
 
+    fn check_local_maximum(fft_max_values: &[f32]) {
+        let mut receiver = ADSBReceiver::new();
+        for &max_value in fft_max_values.iter() {
+            let long_fft = LongFFT {
+                // these two fields are unused by check_local_maximum
+                fft_power: aligned::Aligned([0.0; NUM_FREQ_BINS_KEEP]),
+                max_bin: 0,
+                max_value,
+            };
+            receiver.long_ffts.push(long_fft);
+        }
+        const WINDOW: usize = LOCAL_MAX_WINDOW as usize;
+        let k = fft_max_values.len() - WINDOW - 1;
+        let window = &fft_max_values[k - WINDOW..=k + WINDOW];
+        let max_candidate = fft_max_values[k];
+        let is_local_max = window[..WINDOW].iter().all(|&x| x < max_candidate)
+            && window[WINDOW + 1..].iter().all(|&x| x <= max_candidate);
+        assert_eq!(
+            receiver.check_local_maximum(u64::try_from(k).unwrap()),
+            is_local_max
+        );
+    }
+
     proptest! {
         #[test]
-        fn check_local_maximum(
+        fn check_local_maximum_random_elements(
             fft_max_values in proptest::collection::vec(
                 0.0_f32..1000.0,
                 LOCAL_MAX_WINDOW_SIZE as usize..LOCAL_MAX_WINDOW_SIZE as usize + 128)
         ) {
-            let mut receiver = ADSBReceiver::new();
-            for &max_value in fft_max_values.iter() {
-                let long_fft = LongFFT {
-                    // these two fields are unused by check_local_maximum
-                    fft_power: aligned::Aligned([0.0; NUM_FREQ_BINS_KEEP]),
-                    max_bin: 0,
-                    max_value,
-                };
-                receiver.long_ffts.push(long_fft);
-            }
-            const WINDOW: usize = LOCAL_MAX_WINDOW as usize;
-            let k = fft_max_values.len() - WINDOW - 1;
-            let window = &fft_max_values[k - WINDOW..=k + WINDOW];
-            let is_local_max = fft_max_values[k] == *window
-                .iter()
-                .max_by(|x, y| x.partial_cmp(y).unwrap())
-                .unwrap();
-            assert_eq!(receiver.check_local_maximum(u64::try_from(k).unwrap()),
-                       is_local_max);
+            check_local_maximum(&fft_max_values);
+        }
+    }
+
+    proptest! {
+        // This test exercises cases when some of the fft_max_values are equal
+        // by generating only 0's and 1's as these values.
+        #[test]
+        fn check_local_maximum_ones_and_zeros(
+            fft_max_values in proptest::collection::vec(
+                proptest::sample::select(&[0.0f32, 1.0]),
+                LOCAL_MAX_WINDOW_SIZE as usize..LOCAL_MAX_WINDOW_SIZE as usize + 128)
+        ) {
+            check_local_maximum(&fft_max_values);
         }
     }
 
@@ -1447,28 +1656,127 @@ mod test {
     }
 
     #[test]
-    fn high_cn0_decode() {
-        use crate::simulation::{
-            MessageConfig, MessageType, SingleMessageSimulation,
-            distributions::{CN0Distribution, ConstantCN0, MessageDistributions},
-            rng::rng_from_seed,
+    fn filter_out_decode_candidate_no_errors() {
+        let cn0 = 0.0;
+        let location = DecodeLocation {
+            bit_offset: 0,
+            clock_phase: 0,
+            sym_offset: 0,
+            corrected_errors: BitErrors::NoErrors,
+            demodulation: DemodulationType::NonCoherent,
         };
-        use std::time::Duration;
+        let hamming = || panic!();
+        let receiver = ADSBReceiver::new();
+        assert!(!receiver.filter_out_decode_candidate(cn0, &location, hamming));
+    }
 
+    #[test]
+    fn filter_out_decode_candidate_one_error() {
+        let cn0 = 0.0;
+        let location = DecodeLocation {
+            bit_offset: 0,
+            clock_phase: 0,
+            sym_offset: 0,
+            corrected_errors: BitErrors::SingleError(0),
+            demodulation: DemodulationType::NonCoherent,
+        };
+        let hamming = || panic!();
+        let receiver = ADSBReceiver::new();
+        assert!(!receiver.filter_out_decode_candidate(cn0, &location, hamming));
+    }
+
+    #[test]
+    fn filter_out_decode_candidate_two_errors_low_cn0() {
+        let cn0 = 0.99 * CN0_THRESHOLD;
+        let location = DecodeLocation {
+            bit_offset: 0,
+            clock_phase: 0,
+            sym_offset: 0,
+            corrected_errors: BitErrors::DoubleError(0, 1),
+            demodulation: DemodulationType::Coherent,
+        };
+        let hamming = || panic!();
+        let receiver = ADSBReceiver::new();
+        assert!(receiver.filter_out_decode_candidate(cn0, &location, hamming));
+    }
+
+    #[test]
+    fn filter_out_decode_candidate_two_errors_coherent_high_cn0() {
+        let cn0 = 1.01 * CN0_THRESHOLD;
+        let location = DecodeLocation {
+            bit_offset: 0,
+            clock_phase: 0,
+            sym_offset: 0,
+            corrected_errors: BitErrors::DoubleError(0, 1),
+            demodulation: DemodulationType::Coherent,
+        };
+        let hamming = || panic!();
+        let receiver = ADSBReceiver::new();
+        assert!(!receiver.filter_out_decode_candidate(cn0, &location, hamming));
+    }
+
+    #[test]
+    fn filter_out_decode_candidate_two_errors_high_hamming_low_cn0() {
+        let cn0 = 0.99 * NONCOHERENT_HIGH_HAMMING_CN0_THRESHOLD;
+        let location = DecodeLocation {
+            bit_offset: 0,
+            clock_phase: 0,
+            sym_offset: 0,
+            corrected_errors: BitErrors::DoubleError(0, 1),
+            demodulation: DemodulationType::NonCoherent,
+        };
+        let hamming = || NONCOHERENT_HIGH_HAMMING_DISTANCE;
+        let receiver = ADSBReceiver::new();
+        assert!(receiver.filter_out_decode_candidate(cn0, &location, hamming));
+    }
+
+    #[test]
+    fn filter_out_decode_candidate_two_errors_high_hamming_high_corr() {
+        let cn0 = 1.01 * NONCOHERENT_HIGH_HAMMING_CN0_THRESHOLD;
+        let location = DecodeLocation {
+            bit_offset: 0,
+            clock_phase: 0,
+            sym_offset: 0,
+            corrected_errors: BitErrors::DoubleError(0, 1),
+            demodulation: DemodulationType::NonCoherent,
+        };
+        let hamming = || NONCOHERENT_HIGH_HAMMING_DISTANCE;
+        let receiver = ADSBReceiver::new();
+        assert!(!receiver.filter_out_decode_candidate(cn0, &location, hamming));
+    }
+
+    fn run_simulation_decode(
+        cn0_db: f64,
+        message_type: MessageType,
+        bit_error_locations: &[u8],
+    ) -> (Option<ADSBPacket>, MessageConfig) {
         let mut rng = rng_from_seed(0);
-        let cn0_db = 75.0;
         let start = 1600.0; // 200 usec
+        let message_config = MessageConfig::from_distributions(
+            start,
+            MessageDistributions {
+                cn0: CN0Distribution::Constant(ConstantCN0::new(cn0_db).unwrap()),
+                ..Default::default()
+            },
+            message_type,
+            &mut rng,
+        );
+        let mut message_config_with_errors = message_config.clone();
+        if !bit_error_locations.is_empty() {
+            let SSRReply::ModeS(ModeSMessage::Long(message)) =
+                &mut message_config_with_errors.message
+            else {
+                panic!();
+            };
+            for bit in bit_error_locations.iter() {
+                let byte = bit / 8;
+                let bit = bit - 8 * byte;
+                message[usize::from(byte)] ^= 1 << (7 - bit);
+            }
+        }
         let simulation = SingleMessageSimulation {
             duration: Duration::from_millis(2),
-            message_config: MessageConfig::from_distributions(
-                start,
-                MessageDistributions {
-                    cn0: CN0Distribution::Constant(ConstantCN0::new(cn0_db).unwrap()),
-                    ..Default::default()
-                },
-                MessageType::ExtendedSquitter,
-                &mut rng,
-            ),
+            message_config: message_config_with_errors,
         };
         let iq = simulation.run(&mut rng);
         assert!(iq.len().is_multiple_of(NFFT_SHORT));
@@ -1480,10 +1788,22 @@ mod test {
                 packet = Some(p.clone());
             }
         }
+        (packet, message_config)
+    }
+
+    fn high_cn0_successful_decode(cn0_db: f64, bit_errors: &[u8]) {
+        let expected_corrected_errors = match bit_errors {
+            [] => BitErrors::NoErrors,
+            &[a] => BitErrors::SingleError(a),
+            &[a, b] => BitErrors::DoubleError(a, b),
+            _ => panic!("more than two bit errors"),
+        };
+        let (packet, message_config) =
+            run_simulation_decode(cn0_db, MessageType::ExtendedSquitter, bit_errors);
         let packet = packet.unwrap();
         let reply_preamble_duration =
-            REPLY_PREAMBLE_SAMPLES as f64 * (1.0 - simulation.message_config.symbol_clock_error);
-        let packet_start = simulation.message_config.timestamp_samples + reply_preamble_duration;
+            REPLY_PREAMBLE_SAMPLES as f64 * (1.0 - message_config.symbol_clock_error);
+        let packet_start = message_config.timestamp_samples + reply_preamble_duration;
         // In infinite SNR, the detection timing error should be bounded by
         // NFFT_SHORT / 2, which is half of the time step, but in finite SNR
         // there can be a slightly larger error because of noise.
@@ -1492,8 +1812,7 @@ mod test {
                 <= (5 * NFFT_SHORT / 8) as f64
         );
         assert!(
-            (packet.detection.carrier_frequency_offset
-                - simulation.message_config.carrier_frequency_offset)
+            (packet.detection.carrier_frequency_offset - message_config.carrier_frequency_offset)
                 .abs()
                 <= 200.0
         );
@@ -1502,14 +1821,93 @@ mod test {
             (decode.sample_index as f64 + f64::from(decode.sample_index_frac) - packet_start).abs()
                 <= 0.2
         );
-        let crate::mode_s::ModeSMessage::Long(expected_message) =
-            &simulation.message_config.message
+        let crate::simulation::SSRReply::ModeS(crate::mode_s::ModeSMessage::Long(expected_message)) =
+            &message_config.message
         else {
             panic!();
         };
         assert_eq!(&decode.message, expected_message);
-        assert_eq!(decode.corrected_errors, BitErrors::NoErrors);
+        assert_eq!(decode.corrected_errors, expected_corrected_errors);
         assert_eq!(decode.demodulation, DemodulationType::Coherent);
-        assert!((f64::from(decode.cn0_db) - cn0_db).abs() <= 0.5);
+        match expected_corrected_errors {
+            BitErrors::NoErrors => {
+                // if there are no bit errors, the CN0 estimate needs to be pretty accurate
+                assert!((f64::from(decode.cn0_db) - cn0_db).abs() <= 0.5);
+            }
+            // if bit errors were injected, the CN0 estimate will fall, due to
+            // the bit errors not contributing message power
+            BitErrors::SingleError(_) => assert!(f64::from(decode.cn0_db) >= cn0_db - 2.0),
+            BitErrors::DoubleError(_, _) => assert!(f64::from(decode.cn0_db) >= cn0_db - 4.0),
+        }
+    }
+
+    #[test]
+    fn high_cn0_decode() {
+        high_cn0_successful_decode(75.0, &[]);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 10,
+            .. ProptestConfig::default()
+        })]
+        #[test]
+        fn high_cn0_decode_one_bit_error(
+            bit_error in 0u8..u8::try_from(MODE_S_LONG_BITS).unwrap()
+        ) {
+            high_cn0_successful_decode(80.0, &[bit_error]);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 10,
+            .. ProptestConfig::default()
+        })]
+        #[test]
+        fn high_cn0_decode_two_bit_errors(
+            bit_errors in proptest::sample::subsequence(
+                (0u8..u8::try_from(MODE_S_LONG_BITS).unwrap()).collect::<Vec<_>>(),
+                2,
+            )
+        ) {
+            high_cn0_successful_decode(80.0, &bit_errors);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 10,
+            .. ProptestConfig::default()
+        })]
+        #[test]
+        fn three_bit_errors_does_not_decode(
+            bit_errors in proptest::sample::subsequence(
+                (0u8..u8::try_from(MODE_S_LONG_BITS).unwrap()).collect::<Vec<_>>(),
+                3,
+            )
+        ) {
+            let (packet, message_config) = run_simulation_decode(
+                120.0, MessageType::ExtendedSquitter, &bit_errors);
+            let packet = packet.unwrap();
+            // The decode must either fail or be a false decode
+            if let Some(decode) = &packet.decode {
+                let SSRReply::ModeS(ModeSMessage::Long(expected_message)) = message_config.message else {
+                    panic!();
+                };
+                assert_ne!(decode.message, expected_message);
+            }
+        }
+    }
+
+    #[test]
+    fn non_es_message_does_not_decode() {
+        for &message_type in MessageType::ALL
+            .iter()
+            .filter(|&&t| t != MessageType::ExtendedSquitter)
+        {
+            let packet = run_simulation_decode(120.0, message_type, &[]).0;
+            assert!(packet.is_none() || packet.unwrap().decode.is_none());
+        }
     }
 }

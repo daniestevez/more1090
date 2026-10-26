@@ -1,0 +1,57 @@
+{
+  "benchmark": {
+    "cn0": 105.25,
+    "num_packets": 100000,
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "avg_cn0_error": -2.0722709478759764,
+    "avg_decode_time_error": -0.0219595688185812,
+    "avg_detection_time_error": -15.362374341638473,
+    "decode_probability": 1.0,
+    "decode_probability_noncoherent": 0.0,
+    "decode_probability_one_bit_error": 0.0,
+    "decode_probability_two_bit_errors": 0.0,
+    "decode_probability_zero_bit_errors": 1.0,
+    "decode_wrong_probability": 0.0,
+    "decode_wrong_probability_noncoherent": null,
+    "decode_wrong_probability_one_bit_error": 0.0,
+    "decode_wrong_probability_two_bit_errors": 0.0,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "detection_probability": 1.0,
+    "max_cn0_error": 4.013694763183594,
+    "max_decode_time_error": 0.11605193086916188,
+    "max_detection_time_error": 83.45093548629939,
+    "max_frequency_error": 52.12838005385129,
+    "num_decoded": 100000,
+    "num_decoded_noncoherent": 0,
+    "num_decoded_one_bit_error": 0,
+    "num_decoded_two_bit_errors": 0,
+    "num_decoded_wrong": 0,
+    "num_decoded_wrong_noncoherent": 0,
+    "num_decoded_wrong_one_bit_error": 0,
+    "num_decoded_wrong_two_bit_errors": 0,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 100000,
+    "num_detections": 100000,
+    "num_packets": 100000,
+    "real_time_duration": {
+      "nanos": 364936410,
+      "secs": 4
+    },
+    "rms_frequency_error": 24.968794837984543,
+    "std_cn0_error": 0.6127244923321313,
+    "std_decode_time_error": 0.051784552368403625,
+    "std_detection_time_error": 36.989295241866216,
+    "thread_throughput_sps": 11913117.42385727,
+    "throughput_sps": 190609878.78171632
+  }
+}

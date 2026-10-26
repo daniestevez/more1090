@@ -11,9 +11,9 @@ use rand::{Rng, SeedableRng, rngs::Xoshiro256PlusPlus};
 /// This function returns an RNG initialized with a 64-bit seed. The RNG is
 /// guaranteed to give reproducible results.
 ///
-/// An `impl Rng` is returned to allow changing the underlying RNG
+/// An `impl Rng + SeedableRng` is returned to allow changing the underlying RNG
 /// implementation in the future without having to change the API.
-pub fn rng_from_seed(seed: u64) -> impl Rng {
+pub fn rng_from_seed(seed: u64) -> impl Rng + SeedableRng {
     Xoshiro256PlusPlus::seed_from_u64(seed)
 }
 

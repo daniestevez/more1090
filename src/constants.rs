@@ -108,15 +108,32 @@ pub mod dsp {
     /// Default carrier metric threshold used for carrier detection.
     pub const CARRIER_METRIC_THRESHOLD: f32 = 0.0148;
 
-    /// Default preamble metric threshold used for preamble validation.
-    pub const PREAMBLE_METRIC_THRESHOLD: f32 = 2.5e-4;
+    /// Default CN0 threshold in dB·Hz used for decode validation.
+    pub const CN0_THRESHOLD: f32 = 67.0;
+
+    /// Default Hamming distance threshold for rejection of 2-bit error
+    /// noncoherent decodes.
+    ///
+    /// In order to reduce the number of false decodes, for a noncoherent decode
+    /// candidate with 2 bit errors, the receiver computes the Hamming distance
+    /// between the coherent and noncoherent demodulations corresponding to that
+    /// candidate. If the distance is greater or equal than this threshold, then
+    /// the preamble validation is done against a higher threshold
+    /// ([`NONCOHERENT_HIGH_HAMMING_CN0_THRESHOLD`] by default).
+    pub const NONCOHERENT_HIGH_HAMMING_DISTANCE: u32 = 8;
+
+    /// Default increased CN0 threshold in dB·Hz for rejection of 2-bit error
+    /// noncoherent decodes.
+    ///
+    /// See [`NONCOHERENT_HIGH_HAMMING_DISTANCE`].
+    pub const NONCOHERENT_HIGH_HAMMING_CN0_THRESHOLD: f32 = 71.0;
 
     /// Number of IQ samples in a Mode-S long message payload.
     pub const MODE_S_LONG_SAMPLES: usize =
         super::mode_s::MODE_S_LONG_BITS * SAMPLE_RATE_USIZE / 1_000_000;
 
     /// Left margin in samples used for packet cropping.
-    pub const LEFT_MARGIN: usize = NFFT_SHORT + SPS * 2 * super::mode_s::REPLY_PREAMBLE_BITS;
+    pub const LEFT_MARGIN: usize = NFFT_SHORT;
 
     /// Right margin in samples used for packet cropping.
     pub const RIGHT_MARGIN: usize = NFFT_SHORT + SPS - 1;
@@ -132,12 +149,6 @@ pub mod dsp {
     /// Each pair of symbols contributes one bit, so the number of bytes is
     /// equal to the number of symbols divided by 16.
     pub const PACKET_WINDOW_BYTES: usize = PACKET_WINDOW_SYMBOLS / 16;
-
-    /// Mask for preamble correlation.
-    pub const PREAMBLE_MASK: [i8; 10] = [1, -1, 1, -1, 0, 0, -1, 1, -1, 1];
-
-    /// Length of preamble correlation window.
-    pub const PREAMBLE_MASK_LEN: usize = PREAMBLE_MASK.len();
 
     /// Length of Mode-S reply preamble in samples.
     pub const REPLY_PREAMBLE_SAMPLES: usize = 2 * super::mode_s::REPLY_PREAMBLE_BITS * SPS;

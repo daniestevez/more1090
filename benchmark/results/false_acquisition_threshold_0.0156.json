@@ -1,0 +1,32 @@
+{
+  "benchmark": {
+    "duration": {
+      "nanos": 0,
+      "secs": 10000
+    },
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.015599999576807022,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "benchmark_duration": {
+      "nanos": 0,
+      "secs": 10000
+    },
+    "false_detections": 11,
+    "false_detections_per_second": 0.0011,
+    "real_time_duration": {
+      "nanos": 155933602,
+      "secs": 368
+    },
+    "seconds_per_false_detection": 909.090909090909,
+    "thread_throughput_sps": 13581201.723629745,
+    "throughput_sps": 217299227.57807592
+  }
+}

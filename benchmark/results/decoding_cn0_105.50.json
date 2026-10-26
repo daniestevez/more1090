@@ -1,0 +1,57 @@
+{
+  "benchmark": {
+    "cn0": 105.5,
+    "num_packets": 100000,
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "avg_cn0_error": -2.1556204424285887,
+    "avg_decode_time_error": -0.02195953224368105,
+    "avg_detection_time_error": -15.364934341638472,
+    "decode_probability": 1.0,
+    "decode_probability_noncoherent": 0.0,
+    "decode_probability_one_bit_error": 0.0,
+    "decode_probability_two_bit_errors": 0.0,
+    "decode_probability_zero_bit_errors": 1.0,
+    "decode_wrong_probability": 0.0,
+    "decode_wrong_probability_noncoherent": null,
+    "decode_wrong_probability_one_bit_error": 0.0,
+    "decode_wrong_probability_two_bit_errors": 0.0,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "detection_probability": 1.0,
+    "max_cn0_error": 4.115753173828125,
+    "max_decode_time_error": 0.11599271365457753,
+    "max_detection_time_error": 83.45093548629939,
+    "max_frequency_error": 51.62267189583508,
+    "num_decoded": 100000,
+    "num_decoded_noncoherent": 0,
+    "num_decoded_one_bit_error": 0,
+    "num_decoded_two_bit_errors": 0,
+    "num_decoded_wrong": 0,
+    "num_decoded_wrong_noncoherent": 0,
+    "num_decoded_wrong_one_bit_error": 0,
+    "num_decoded_wrong_two_bit_errors": 0,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 100000,
+    "num_detections": 100000,
+    "num_packets": 100000,
+    "real_time_duration": {
+      "nanos": 310162750,
+      "secs": 4
+    },
+    "rms_frequency_error": 24.95176742980082,
+    "std_cn0_error": 0.6241971817635433,
+    "std_decode_time_error": 0.051784249017738954,
+    "std_detection_time_error": 36.98907874981918,
+    "thread_throughput_sps": 12064509.62901575,
+    "throughput_sps": 193032154.064252
+  }
+}

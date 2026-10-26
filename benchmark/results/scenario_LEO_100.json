@@ -1,0 +1,64 @@
+{
+  "benchmark": {
+    "duration": {
+      "nanos": 0,
+      "secs": 1000
+    },
+    "max_cn0": 75.0,
+    "max_distance": 2600.0,
+    "messages_per_second": 100.0,
+    "min_distance": 500.0,
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "avg_cn0_error": -0.33235074622558686,
+    "avg_decode_time_error": -0.019922041481124624,
+    "avg_detection_time_error": -15.059114224360059,
+    "collision_probability": 0.021413563413652824,
+    "decode_probability": 0.09195761992042559,
+    "decode_probability_noncoherent": 0.02916869227029655,
+    "decode_probability_one_bit_error": 0.025727569404086013,
+    "decode_probability_two_bit_errors": 0.02123474451249497,
+    "decode_probability_zero_bit_errors": 0.044995306003844604,
+    "decode_wrong_probability": 0.0005811614287630203,
+    "decode_wrong_probability_noncoherent": 0.2692307692307692,
+    "decode_wrong_probability_one_bit_error": 0.00020117126380258393,
+    "decode_wrong_probability_two_bit_errors": 0.00037999016496043634,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "max_cn0_error": 4.390392994608945,
+    "max_decode_time_error": 0.32580381631851196,
+    "max_detection_time_error": 101.52944892644882,
+    "max_frequency_error": 1232.8449868858443,
+    "num_decoded": 4114,
+    "num_decoded_noncoherent": 120,
+    "num_decoded_one_bit_error": 1151,
+    "num_decoded_two_bit_errors": 950,
+    "num_decoded_wrong": 26,
+    "num_decoded_wrong_noncoherent": 7,
+    "num_decoded_wrong_one_bit_error": 9,
+    "num_decoded_wrong_two_bit_errors": 17,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 2013,
+    "num_detections": 71726,
+    "num_packets": 44738,
+    "num_packets_collision": 958,
+    "real_time_duration": {
+      "nanos": 77900610,
+      "secs": 36
+    },
+    "rms_frequency_error": 196.38779574217693,
+    "std_cn0_error": 0.5714288057202863,
+    "std_decode_time_error": 0.07403878065110002,
+    "std_detection_time_error": 37.74629059020716,
+    "thread_throughput_sps": 13861116.95926644,
+    "throughput_sps": 221777871.34826303
+  }
+}

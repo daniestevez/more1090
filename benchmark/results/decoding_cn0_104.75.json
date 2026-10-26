@@ -1,0 +1,57 @@
+{
+  "benchmark": {
+    "cn0": 104.75,
+    "num_packets": 100000,
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "avg_cn0_error": -1.914755721511841,
+    "avg_decode_time_error": -0.021959643204581835,
+    "avg_detection_time_error": -15.373894341638469,
+    "decode_probability": 1.0,
+    "decode_probability_noncoherent": 0.0,
+    "decode_probability_one_bit_error": 0.0,
+    "decode_probability_two_bit_errors": 0.0,
+    "decode_probability_zero_bit_errors": 1.0,
+    "decode_wrong_probability": 0.0,
+    "decode_wrong_probability_noncoherent": null,
+    "decode_wrong_probability_one_bit_error": 0.0,
+    "decode_wrong_probability_two_bit_errors": 0.0,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "detection_probability": 1.0,
+    "max_cn0_error": 3.8180770874023438,
+    "max_decode_time_error": 0.11617552110010365,
+    "max_detection_time_error": 83.5477699439034,
+    "max_frequency_error": 53.183901146097924,
+    "num_decoded": 100000,
+    "num_decoded_noncoherent": 0,
+    "num_decoded_one_bit_error": 0,
+    "num_decoded_two_bit_errors": 0,
+    "num_decoded_wrong": 0,
+    "num_decoded_wrong_noncoherent": 0,
+    "num_decoded_wrong_one_bit_error": 0,
+    "num_decoded_wrong_two_bit_errors": 0,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 100000,
+    "num_detections": 100000,
+    "num_packets": 100000,
+    "real_time_duration": {
+      "nanos": 354352130,
+      "secs": 4
+    },
+    "rms_frequency_error": 25.005736283981687,
+    "std_cn0_error": 0.590900806080685,
+    "std_decode_time_error": 0.05178522844242178,
+    "std_detection_time_error": 36.9899930117766,
+    "thread_throughput_sps": 11942075.065940982,
+    "throughput_sps": 191073201.0550557
+  }
+}

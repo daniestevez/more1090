@@ -6,38 +6,42 @@
 //! requires an input sample rate of 8 Msps IQ. It decodes extended squitter
 //! (DF17 and DF18) Mode-S reply messages. In addition to the decoded message,
 //! the receiver provides estimates for the time of arrival, the carrier
-//! frequency and the CN0 of the ADS-B message.
+//! frequency and the CN0 of the decoded ADS-B messages.
 //!
 //! more1090 can be used as a CLI application called `more1090` that reads a
 //! SigMF file and produces an annotation for each decoded message, or reads a
-//! real time stream from stdin and outputs each decoded message in AVR format
+//! real-time stream from stdin and outputs each decoded message in AVR format
 //! (allowing the output to be piped into other applications such as
 //! [tar1090](https://github.com/wiedehopf/tar1090)). more1090 also contains a
-//! Mode-S signal simulator called `more1090-simulator` and a benchmarking tool
-//! called `more1090-benchmark` that is used to benchmark the sensitivity and
-//! throughput of the more1090 ADS-B receiver. Additionally, all of this can be
-//! used as a Rust library.
+//! secondary surveillance radar reply signal simulator called
+//! `more1090-simulator` that is able to generate all types of Mode-A/C and
+//! Mode-S replies, and a benchmarking tool called `more1090-benchmark` that is
+//! used to benchmark the sensitivity and throughput of the more1090 ADS-B
+//! receiver. Additionally, all of this can be used as a Rust library.
 //!
 //! ## Example
 //!
-//! The receiver is instantiated with some fixed buffer sizes at compile time,
-//! which can be optimized to trade off lower overhead or better cache
-//! locality. Based on these buffer sizes, the receiver's
-//! [`process_chunk`](ADSBReceiver::process_chunk) method supports a maximum
-//! chunk size. IQ data is fed into the receiver in chunks of samples whose
-//! length must be a multiple of
-//! [`NFFT_SHORT`](crate::constants::dsp::NFFT_SHORT) and lower than or equal to
-//! the maximum chunk size. Each `process_chunk` call returns a slice containing
-//! the detected and decoded packets.
+//! The IQ input is fed to the ADS-B receiver in small chunks of a fixed length
+//! [`CHUNK_LEN`] using its [`process_chunk`](ADSBReceiver::process_chunk)
+//! function. Each call to this function can return a single detected or decoded
+//! ADS-B message if the IQ data supplied completed the message's data (plus
+//! some fixed amount of trailing data that is needed by the processing
+//! algorithm).
+//!
+//! The receiver uses SIMD, so it benefits from the input data being aligned to
+//! the SIMD word size, but it does not require it. The `more1090` crate
+//! provides some types and constants that define the recommended alignment
+//! using the [`aligned`] and [`aligned_vec`] crates. This example shows how to
+//! use the `aligned_vec` crate to define a vector for the input data.
 //!
 //! ```
 //! # fn main() {
-//! use more1090::{ADSBReceiver, CHUNK_LEN};
+//! use more1090::{ADSBReceiver, ALIGN, CHUNK_LEN};
 //! use num::complex::Complex32;
 //!
 //! let mut receiver = ADSBReceiver::new();
-//! // Usually the IQ input will come from an external source or file
-//! let iq = vec![Complex32::new(0.0, 0.0); 16_000]; // 2 ms of IQ samples
+//! // Usually the IQ input comes from an external source or file
+//! let iq = aligned_vec::avec![[ALIGN] | Complex32::new(0.0, 0.0); 16_000];
 //! for chunk in iq.as_chunks::<CHUNK_LEN>().0.iter() {
 //!     if let Some(packet) = receiver.process_chunk(chunk) {
 //!         dbg!(packet);
@@ -78,12 +82,13 @@ pub mod cli;
 pub mod constants;
 pub mod io;
 pub mod math;
+pub mod mode_ac;
 pub mod mode_s;
 pub mod receiver;
 pub mod sigmf;
 pub mod simulation;
 
-pub use receiver::{A, ADSBReceiver, Align};
+pub use receiver::{A, ADSBReceiver, ALIGN, AVec, Align, AlignVec};
 
 /// Chunk length used in the input of the [`ADSBReceiver`].
 ///

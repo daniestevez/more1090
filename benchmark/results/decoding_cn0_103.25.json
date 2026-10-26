@@ -1,0 +1,57 @@
+{
+  "benchmark": {
+    "cn0": 103.25,
+    "num_packets": 100000,
+    "num_threads": 16,
+    "random_seed": 0,
+    "receiver_args": {
+      "carrier_metric_threshold": 0.014800000004470348,
+      "cn0_threshold": 67.0,
+      "error_correction_level": "DoubleError",
+      "noncoherent_high_hamming_cn0_threshold": 71.0,
+      "noncoherent_high_hamming_distance": 8
+    }
+  },
+  "results": {
+    "avg_cn0_error": -1.5109498401641845,
+    "avg_decode_time_error": -0.021959901318025686,
+    "avg_detection_time_error": -15.387974341638472,
+    "decode_probability": 1.0,
+    "decode_probability_noncoherent": 0.0,
+    "decode_probability_one_bit_error": 0.0,
+    "decode_probability_two_bit_errors": 0.0,
+    "decode_probability_zero_bit_errors": 1.0,
+    "decode_wrong_probability": 0.0,
+    "decode_wrong_probability_noncoherent": null,
+    "decode_wrong_probability_one_bit_error": 0.0,
+    "decode_wrong_probability_two_bit_errors": 0.0,
+    "decode_wrong_probability_zero_bit_errors": 0.0,
+    "detection_probability": 1.0,
+    "max_cn0_error": 3.2967681884765625,
+    "max_decode_time_error": 0.11659141250902394,
+    "max_detection_time_error": 83.63581744141811,
+    "max_frequency_error": 56.73902550556522,
+    "num_decoded": 100000,
+    "num_decoded_noncoherent": 0,
+    "num_decoded_one_bit_error": 0,
+    "num_decoded_two_bit_errors": 0,
+    "num_decoded_wrong": 0,
+    "num_decoded_wrong_noncoherent": 0,
+    "num_decoded_wrong_one_bit_error": 0,
+    "num_decoded_wrong_two_bit_errors": 0,
+    "num_decoded_wrong_zero_bit_errors": 0,
+    "num_decoded_zero_bit_errors": 100000,
+    "num_detections": 100000,
+    "num_packets": 100000,
+    "real_time_duration": {
+      "nanos": 324947890,
+      "secs": 4
+    },
+    "rms_frequency_error": 25.14624151658083,
+    "std_cn0_error": 0.5347507067712188,
+    "std_decode_time_error": 0.051787947530374565,
+    "std_detection_time_error": 36.99161486738149,
+    "thread_throughput_sps": 12023266.250266891,
+    "throughput_sps": 192372260.00427026
+  }
+}

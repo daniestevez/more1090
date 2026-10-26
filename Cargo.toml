@@ -1,18 +1,27 @@
 [package]
 name = "more1090"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Daniel Estevez <daniel@destevez.net>"]
-description = "ADS-B receiver and Mode-S signal simulator"
+description = "ADS-B (Mode-S extended squitter) receiver and secondary surveillance radar reply signal simulator"
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/daniestevez/more1090/"
 repository = "https://github.com/daniestevez/more1090/"
-keywords = ["ads-b", "mode-s", "aircraft", "decoding"]
+keywords = ["ads-b", "mode-s", "radar", "aircraft", "decoding"]
 categories = ["aerospace::protocols", "command-line-utilities"]
 exclude = ["/.github", "/benchmark"]
 
+[features]
+# build and run heavy integration tests
+heavy-tests = []
+
+[[test]]
+name = "simulator_and_receiver"
+required-features = ["heavy-tests"]
+
 [dependencies]
 aligned = "0.4.3"
+aligned-vec = "0.6.4"
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 const-hex = "1.19.1"
@@ -32,5 +41,10 @@ tempfile = "3.27.0"
 
 [profile.release]
 lto = true
-debug = true
+strip = true
 codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
