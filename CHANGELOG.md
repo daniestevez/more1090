@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
 ### Added
 
 - Configuration of `more1090` receiver parameters through CLI arguments.
@@ -44,5 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial more1090 release.
 
-[unreleased]: https://github.com/daniestevez/more1090/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/daniestevez/more1090/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/daniestevez/more1090/releases/tag/v0.2.0
 [0.1.0]: https://github.com/daniestevez/more1090/releases/tag/v0.1.0

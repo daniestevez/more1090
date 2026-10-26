@@ -615,9 +615,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "pm-remez"
-version = "0.3.5"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc8828d2594562583715c53abe01cb797517324029b67e8d6058dca45182abe1"
+checksum = "9c42b934100067040e4d61ddf750451cc14404c823a4bca8f238271447c01d28"
 dependencies = [
  "itertools",
  "nalgebra",
